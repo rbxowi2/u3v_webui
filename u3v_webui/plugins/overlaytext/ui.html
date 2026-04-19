@@ -1,0 +1,14 @@
+<!-- overlaytext/ui.html — injected into #sidebar by syncPluginArea -->
+<div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'\u25bc':'\u25b6'">
+  <span class="collapse-arrow">&#9654;</span>
+  <span>Overlay Text</span>
+</div>
+<div class="collapsible-body">
+  <div style="padding:8px 12px;display:flex;flex-direction:column;gap:6px;">
+    <textarea class="overlaytext-input" rows="3"
+      placeholder="Enter text to display on frame..."
+      style="width:100%;box-sizing:border-box;resize:vertical;font-size:12px;padding:4px 6px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+      oninput="overlayTextOnInput(this)"></textarea>
+    <button class="btn btn-gray" onclick="overlayTextClear(this)">Clear</button>
+  </div>
+</div>
