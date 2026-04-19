@@ -1,10 +1,16 @@
-"""plugins/photo/basic.py — BasicPhoto local plugin (1.0.0)
+"""plugins/photo/basic.py — BasicPhoto local plugin (1.1.0)
 
 Local plugin: one instance per camera.
 Handles single-shot photo capture only.
+
+Capture is triggered via handle_action("take_photo") which sets a pending flag.
+The actual frame is sampled in on_frame at BasicPhoto's position in the pipeline,
+so plugins placed after BasicPhoto are excluded from the saved image — consistent
+with how BasicRecord works.
 """
 
 import os
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -24,6 +30,8 @@ class BasicPhoto(PluginBase):
         self._emit_state = None
         self._state      = None
         self._fmt        = "BMP"
+        self._pending    = False
+        self._lock       = threading.Lock()
 
     # ── Identity ──────────────────────────────────────────────────────────────
 
@@ -33,7 +41,7 @@ class BasicPhoto(PluginBase):
 
     @property
     def version(self) -> str:
-        return "1.0.0"
+        return "1.1.0"
 
     @property
     def description(self) -> str:
@@ -48,6 +56,19 @@ class BasicPhoto(PluginBase):
     def on_camera_open(self, cam_info: dict, cam_id: str = "", driver=None):
         pass  # fmt preserved across reopen
 
+    # ── Frame hook ────────────────────────────────────────────────────────────
+
+    def on_frame(self, frame: np.ndarray, hw_ts_ns: int,
+                 cam_id: str = "") -> Optional[np.ndarray]:
+        with self._lock:
+            if not self._pending:
+                return None
+            self._pending = False
+        # Save in background to avoid blocking the acquisition thread
+        snapshot = frame.copy()
+        threading.Thread(target=self._save, args=(snapshot,), daemon=True).start()
+        return None
+
     # ── State ─────────────────────────────────────────────────────────────────
 
     def get_state(self, cam_id: str = "") -> dict:
@@ -58,7 +79,9 @@ class BasicPhoto(PluginBase):
     def handle_action(self, action: str, data: dict, driver) -> "tuple | None":
         if action != "take_photo":
             return None
-        return self._take_photo(data.get("cam_id", ""), driver)
+        with self._lock:
+            self._pending = True
+        return True, "Capturing..."
 
     def handle_set_param(self, key: str, value, driver) -> bool:
         if key != "photo_fmt":
@@ -66,17 +89,9 @@ class BasicPhoto(PluginBase):
         self._fmt = str(value)
         return True
 
-    # ── Photo ─────────────────────────────────────────────────────────────────
+    # ── Save ──────────────────────────────────────────────────────────────────
 
-    def _take_photo(self, cam_id: str, driver) -> tuple:
-        frame: Optional[np.ndarray] = None
-        if self._state and cam_id:
-            frame = self._state.get_latest_frame(cam_id)
-        if frame is None and driver is not None:
-            frame = driver.latest_frame
-        if frame is None:
-            return False, "Capture failed: no frame received"
-
+    def _save(self, frame: np.ndarray):
         ext = ".jpg" if self._fmt == "JPG" else ".bmp"
         now = datetime.now()
         subdir = os.path.join(CAPTURE_DIR, now.strftime("%Y%m%d"))
@@ -89,4 +104,5 @@ class BasicPhoto(PluginBase):
         msg = (f"Saved: {now.strftime('%Y%m%d')}/{os.path.basename(path)}"
                f" ({size_mb:.2f} MB, {free_gb:.1f} GB free)")
         log(f"Photo  {os.path.basename(path)}  {size_mb:.2f} MB")
-        return True, msg
+        if self._sio:
+            self._sio.emit("status", {"msg": msg})
