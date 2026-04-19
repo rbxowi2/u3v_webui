@@ -28,6 +28,9 @@ class PluginBase(ABC):
     # Injected by PluginManager after instantiation.
     # Call _mark_idle(cam_id) to signal that this plugin finished a busy task.
     _notify_idle = None
+    # Unique key for this instance within a camera's plugin dict.
+    # Equals plugin name for single-instance plugins; auto-suffixed for multi-instance.
+    _instance_key: str = ""
 
     def _mark_idle(self, cam_id: str = ""):
         """Notify the system that this plugin is no longer busy."""

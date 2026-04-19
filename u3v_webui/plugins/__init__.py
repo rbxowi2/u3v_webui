@@ -1,29 +1,43 @@
 """
-plugins/__init__.py — PluginManager: runtime plugin registry (6.7.0).
+plugins/__init__.py — PluginManager: runtime plugin registry (6.11.0).
 
 Plugin discovery contract
 -------------------------
 Each plugin subfolder must contain a plugin.py that exposes:
 
-    PLUGIN_CLASS       : type[PluginBase]
-    PLUGIN_NAME        : str               — unique identifier
-    PLUGIN_TYPE        : str               — "local" or "global"
-    PLUGIN_VERSION     : str               (optional, default "0.1.0")
-    PLUGIN_DESCRIPTION : str               (optional, default "")
+    PLUGIN_CLASS          : type[PluginBase]
+    PLUGIN_NAME           : str               — unique identifier
+    PLUGIN_TYPE           : str               — "local" or "global"
+    PLUGIN_VERSION        : str               (optional, default "0.1.0")
+    PLUGIN_DESCRIPTION    : str               (optional, default "")
+    PLUGIN_ALLOW_MULTIPLE : bool              (optional, default False)
 
 Plugin pipeline
 ---------------
 Every camera has an ordered pipeline list that includes BOTH global and local
-plugins assigned to it.  Plugins in the list have:
+plugins assigned to it.  Each entry has:
 
-    name  : str                     — plugin name
-    ptype : "global" | "local"
-    mode  : "pipeline" | "display"
+    name         : str                     — plugin class name
+    instance_key : str                     — unique key within _local[cam_id]
+                                             equals name for single-instance plugins
+    ptype        : "global" | "local"
+    mode         : "pipeline" | "display"
 
-  "pipeline" — on_frame modifies the frame that flows downstream AND is
-               stored as the pipeline frame (affects recording / photo).
-  "display"  — on_frame modifies only the display copy sent to streaming;
-               the pipeline / recording frame is unaffected.
+Two-phase execution
+-------------------
+Frames are processed in two sequential passes over the ordered pipeline list:
+
+  Phase 1 — pipeline plugins (in list order):
+    on_frame modifies the shared pipeline_frame.  The result is stored and
+    used for recording / photo.
+
+  Phase 2 — display plugins (in list order):
+    on_frame starts from a copy of the final pipeline_frame and applies
+    display-only effects.  The result is used only for streaming.
+
+This guarantees display plugins always see the fully-processed pipeline_frame
+as their base, regardless of how pipeline and display plugins are interleaved
+in the pipeline list.
 
 Frame payload
 -------------
@@ -32,7 +46,8 @@ implementing frame_payload(cam_id) → dict.  streaming.py merges all plugin
 contributions without knowing their field names (true plugin/core separation).
 
 Users can drag-reorder plugins in the sidebar, which changes the execution
-order.  The backend stores this order per camera in _pipeline[cam_id].
+order within each phase.  The backend stores this order per camera in
+_pipeline[cam_id].
 """
 
 import importlib
@@ -86,12 +101,13 @@ class PluginManager:
                 continue
             mod_name = f"{__package__}.{plugin_dir.name}.plugin"
             try:
-                mod   = importlib.import_module(mod_name)
-                cls   = getattr(mod, "PLUGIN_CLASS",       None)
-                name  = getattr(mod, "PLUGIN_NAME",        None)
-                ptype = getattr(mod, "PLUGIN_TYPE",        "local")
-                ver   = getattr(mod, "PLUGIN_VERSION",     "0.1.0")
-                desc  = getattr(mod, "PLUGIN_DESCRIPTION", "")
+                mod            = importlib.import_module(mod_name)
+                cls            = getattr(mod, "PLUGIN_CLASS",          None)
+                name           = getattr(mod, "PLUGIN_NAME",           None)
+                ptype          = getattr(mod, "PLUGIN_TYPE",           "local")
+                ver            = getattr(mod, "PLUGIN_VERSION",        "0.1.0")
+                desc           = getattr(mod, "PLUGIN_DESCRIPTION",    "")
+                allow_multiple = getattr(mod, "PLUGIN_ALLOW_MULTIPLE", False)
                 if cls is None or name is None:
                     log(f"[Plugin] {plugin_dir.name}: missing PLUGIN_CLASS/PLUGIN_NAME — skipped")
                     continue
@@ -99,6 +115,7 @@ class PluginManager:
                 self._available[name] = {
                     "cls": cls, "type": ptype, "version": ver,
                     "description": desc, "dir": cls_dir,
+                    "allow_multiple": allow_multiple,
                 }
                 log(f"[Plugin] Available: {name} v{ver} ({ptype})")
             except Exception as e:
@@ -113,42 +130,65 @@ class PluginManager:
         Local plugins require cam_id.
         Global plugins ignore cam_id; they are appended to ALL existing
         cameras' pipelines as well as the global template.
+        Plugins with PLUGIN_ALLOW_MULTIPLE=True may be added multiple times
+        per camera; each gets an auto-generated instance_key.
         """
         info = self._available.get(plugin_name)
         if info is None:
             return False, f"Unknown plugin: {plugin_name}"
-        ptype = info["type"]
-        cls   = info["cls"]
+        ptype          = info["type"]
+        cls            = info["cls"]
+        allow_multiple = info.get("allow_multiple", False)
 
         with self._lock:
             if ptype == "global":
                 if plugin_name in self._global:
                     return False, f"{plugin_name} already active (global)"
+                instance_key = plugin_name
                 instance = cls()
-                self._global[plugin_name] = instance
-                # Append to global template and all existing camera pipelines
-                self._global_order.append({"name": plugin_name, "mode": "pipeline"})
+                instance._instance_key = instance_key
+                self._global[instance_key] = instance
+                self._global_order.append(
+                    {"name": plugin_name, "instance_key": instance_key, "mode": "pipeline"}
+                )
                 for cid in self._pipeline:
-                    self._pipeline[cid].append(
-                        {"name": plugin_name, "ptype": "global", "mode": "pipeline"}
-                    )
+                    self._pipeline[cid].append({
+                        "name": plugin_name, "instance_key": instance_key,
+                        "ptype": "global", "mode": "pipeline",
+                    })
             else:
                 if not cam_id:
                     return False, "cam_id required for local plugins"
                 self._local.setdefault(cam_id, {})
-                if plugin_name in self._local[cam_id]:
-                    return False, f"{plugin_name} already active for {cam_id}"
+                if not allow_multiple:
+                    if plugin_name in self._local[cam_id]:
+                        return False, f"{plugin_name} already active for {cam_id}"
+                    instance_key = plugin_name
+                else:
+                    existing = set(self._local[cam_id].keys())
+                    if plugin_name not in existing:
+                        instance_key = plugin_name
+                    else:
+                        n = 2
+                        while f"{plugin_name}_{n}" in existing:
+                            n += 1
+                        instance_key = f"{plugin_name}_{n}"
                 instance = cls()
-                self._local[cam_id][plugin_name] = instance
-                # Init camera pipeline from global template if needed
+                instance._instance_key = instance_key
+                self._local[cam_id][instance_key] = instance
                 if cam_id not in self._pipeline:
                     self._pipeline[cam_id] = [
-                        {"name": e["name"], "ptype": "global", "mode": e["mode"]}
+                        {
+                            "name": e["name"],
+                            "instance_key": e.get("instance_key", e["name"]),
+                            "ptype": "global", "mode": e["mode"],
+                        }
                         for e in self._global_order
                     ]
-                self._pipeline[cam_id].append(
-                    {"name": plugin_name, "ptype": "local", "mode": "pipeline"}
-                )
+                self._pipeline[cam_id].append({
+                    "name": plugin_name, "instance_key": instance_key,
+                    "ptype": "local", "mode": "pipeline",
+                })
 
         self._inject_ctx(instance)
 
@@ -177,28 +217,39 @@ class PluginManager:
         log(f"[Plugin] Added: {plugin_name}{suffix}")
         return True, f"Plugin {plugin_name} added"
 
-    def remove_plugin(self, plugin_name: str, cam_id: str = "") -> tuple:
-        """Remove and deactivate a plugin."""
+    def remove_plugin(self, plugin_name: str, cam_id: str = "",
+                      instance_key: str = "") -> tuple:
+        """Remove and deactivate a plugin instance.
+
+        instance_key identifies the specific instance for multi-instance plugins.
+        Defaults to plugin_name (single-instance behaviour).
+        """
         info  = self._available.get(plugin_name, {})
         ptype = info.get("type", "local")
+        ikey  = instance_key or plugin_name
 
         with self._lock:
             if ptype == "global":
-                instance = self._global.pop(plugin_name, None)
-                # Remove from global template and all camera pipelines
-                self._global_order = [e for e in self._global_order
-                                       if e["name"] != plugin_name]
+                instance = self._global.pop(ikey, None)
+                self._global_order = [
+                    e for e in self._global_order
+                    if e.get("instance_key", e["name"]) != ikey
+                ]
                 for cid in self._pipeline:
-                    self._pipeline[cid] = [e for e in self._pipeline[cid]
-                                            if e["name"] != plugin_name]
+                    self._pipeline[cid] = [
+                        e for e in self._pipeline[cid]
+                        if e.get("instance_key", e["name"]) != ikey
+                    ]
             else:
-                instance = self._local.get(cam_id, {}).pop(plugin_name, None)
+                instance = self._local.get(cam_id, {}).pop(ikey, None)
                 if cam_id in self._pipeline:
-                    self._pipeline[cam_id] = [e for e in self._pipeline[cam_id]
-                                               if e["name"] != plugin_name]
+                    self._pipeline[cam_id] = [
+                        e for e in self._pipeline[cam_id]
+                        if e.get("instance_key", e["name"]) != ikey
+                    ]
 
         if instance is None:
-            return False, f"{plugin_name} not active"
+            return False, f"{plugin_name} ({ikey}) not active"
 
         if self._state is not None:
             close_ids = (list(self._state._cameras.keys()) if ptype == "global"
@@ -214,8 +265,8 @@ class PluginManager:
             log(f"[Plugin] {plugin_name} on_unload error: {e}")
 
         suffix = f" [{cam_id}]" if ptype == "local" else ""
-        log(f"[Plugin] Removed: {plugin_name}{suffix}")
-        return True, f"Plugin {plugin_name} removed"
+        log(f"[Plugin] Removed: {ikey}{suffix}")
+        return True, f"Plugin {ikey} removed"
 
     def unregister_all(self):
         """Unload all active plugins (server shutdown)."""
@@ -274,16 +325,19 @@ class PluginManager:
         """
         Pass frame through the ordered pipeline for cam_id.
 
-        Two-pass semantics
-        ------------------
-        "pipeline" mode plugins: on_frame receives and modifies the shared
-            pipeline frame.  The result is stored in the ring buffer and
-            seen by downstream plugins (including recording).
+        Two-phase execution
+        -------------------
+        Phase 1 — pipeline plugins (in list order):
+            on_frame modifies the shared pipeline_frame.  Affects recording
+            and photo capture.
 
-        "display" mode plugins: on_frame receives the current display copy
-            (= pipeline frame if no display modification has run yet).
-            The result is NOT written to the ring buffer; it is only used
-            for streaming.
+        Phase 2 — display plugins (in list order):
+            on_frame starts from a copy of the final pipeline_frame.
+            Modifications reach only the stream; recording is unaffected.
+
+        Because phases are separated, display plugins always see the
+        fully-processed pipeline_frame regardless of their position in the
+        pipeline list.
 
         Returns
         -------
@@ -292,25 +346,29 @@ class PluginManager:
             display_frame  — goes to streaming (viewers)
         """
         pipeline_frame = frame
-        display_frame: Optional[np.ndarray] = None
 
+        # Phase 1: pipeline plugins
         for inst, mode in self._iter_pipeline(cam_id):
+            if mode != "pipeline":
+                continue
             try:
-                if mode == "pipeline":
-                    input_frame = pipeline_frame
-                else:
-                    if display_frame is None:
-                        display_frame = pipeline_frame.copy()
-                    input_frame = display_frame
-
-                result = inst.on_frame(input_frame, hw_ts_ns, cam_id)
-
+                result = inst.on_frame(pipeline_frame, hw_ts_ns, cam_id)
                 if result is not None:
-                    if mode == "pipeline":
-                        pipeline_frame = result
-                        display_frame  = None   # reset: display re-derived next time
-                    else:
-                        display_frame = result
+                    pipeline_frame = result
+            except Exception as e:
+                log(f"[Plugin] {inst.name} on_frame error: {e}")
+
+        # Phase 2: display plugins
+        display_frame: Optional[np.ndarray] = None
+        for inst, mode in self._iter_pipeline(cam_id):
+            if mode != "display":
+                continue
+            try:
+                if display_frame is None:
+                    display_frame = pipeline_frame.copy()
+                result = inst.on_frame(display_frame, hw_ts_ns, cam_id)
+                if result is not None:
+                    display_frame = result
             except Exception as e:
                 log(f"[Plugin] {inst.name} on_frame error: {e}")
 
@@ -372,36 +430,37 @@ class PluginManager:
     # ── Pipeline ordering / mode ──────────────────────────────────────────────
 
     def reorder_plugins(self, cam_id: str, names: List[str]):
-        """Reorder the pipeline for cam_id based on the supplied name list."""
+        """Reorder the pipeline for cam_id.
+
+        names is a list of instance_keys in the desired order.
+        """
         with self._lock:
             pipeline = self._pipeline.get(cam_id)
             if pipeline is None:
                 return
-            name_to_entry = {e["name"]: e for e in pipeline}
-            new_pl = [name_to_entry[n] for n in names if n in name_to_entry]
-            # Append any entry that was omitted from the client list
+            key_to_entry = {e.get("instance_key", e["name"]): e for e in pipeline}
+            new_pl = [key_to_entry[n] for n in names if n in key_to_entry]
             mentioned = set(names)
             for e in pipeline:
-                if e["name"] not in mentioned:
+                if e.get("instance_key", e["name"]) not in mentioned:
                     new_pl.append(e)
             self._pipeline[cam_id] = new_pl
         log(f"[Plugin] Pipeline reordered [{cam_id}]: {names}")
 
-    def set_plugin_mode(self, cam_id: str, plugin_name: str, mode: str):
-        """Set pipeline mode ("pipeline" or "display") for a plugin in cam_id."""
+    def set_plugin_mode(self, cam_id: str, instance_key: str, mode: str):
+        """Set pipeline mode ("pipeline" or "display") for a plugin instance."""
         if mode not in ("pipeline", "display"):
             return
         with self._lock:
             for entry in self._pipeline.get(cam_id, []):
-                if entry["name"] == plugin_name:
+                if entry.get("instance_key", entry["name"]) == instance_key:
                     entry["mode"] = mode
                     break
-            # Mirror onto global template if it's a global plugin
             for entry in self._global_order:
-                if entry["name"] == plugin_name:
+                if entry.get("instance_key", entry["name"]) == instance_key:
                     entry["mode"] = mode
                     break
-        log(f"[Plugin] Mode [{cam_id}] {plugin_name} → {mode}")
+        log(f"[Plugin] Mode [{cam_id}] {instance_key} → {mode}")
 
     # ── Busy guard ────────────────────────────────────────────────────────────
 
@@ -432,8 +491,11 @@ class PluginManager:
 
     def list_available(self) -> list:
         return [
-            {"name": n, "version": i["version"],
-             "description": i["description"], "type": i["type"]}
+            {
+                "name": n, "version": i["version"],
+                "description": i["description"], "type": i["type"],
+                "allow_multiple": i.get("allow_multiple", False),
+            }
             for n, i in self._available.items()
         ]
 
@@ -554,11 +616,11 @@ class PluginManager:
         def _set_plugin_mode(data):
             if not is_admin():
                 return
-            cam_id      = data.get("cam_id", "")
-            plugin_name = data.get("plugin_name", "")
-            mode        = data.get("mode", "pipeline")
-            if cam_id and plugin_name:
-                self.set_plugin_mode(cam_id, plugin_name, mode)
+            cam_id       = data.get("cam_id", "")
+            instance_key = data.get("instance_key") or data.get("plugin_name", "")
+            mode         = data.get("mode", "pipeline")
+            if cam_id and instance_key:
+                self.set_plugin_mode(cam_id, instance_key, mode)
                 emit_state()
 
     def list_js_urls(self) -> list:
@@ -584,7 +646,8 @@ class PluginManager:
             name  = entry["name"]
             ptype = entry["ptype"]
             mode  = entry["mode"]
-            inst  = global_snap.get(name) if ptype == "global" else local_snap.get(name)
+            ikey  = entry.get("instance_key", name)
+            inst  = global_snap.get(ikey) if ptype == "global" else local_snap.get(ikey)
             if inst is not None:
                 result.append((inst, mode))
         return result
