@@ -1,8 +1,7 @@
 # u3v-webui Developer Guide
 
 **Version:** 6.11.0  
-**Project:** Industrial Camera LAN WebUI — multi-camera, extensible
-
+**Project:** Multi-camera WebUI Demo 
 ---
 
 ## Table of Contents
