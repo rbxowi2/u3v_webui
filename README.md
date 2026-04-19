@@ -28,7 +28,7 @@ source venv/bin/activate
 pip install flask flask-socketio
 ```
 
-### 3. Option- USB3 Vision cameras
+### 3. Option- USB3 Vision camera
 
 Camera Access Permissions (one-time setup) 
 This project is developed and tested with **Hikvision USB3 Vision cameras**
