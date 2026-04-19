@@ -472,9 +472,10 @@ def on_remove_plugin(data: dict):
     if not _is_admin_sid():
         return
     from .plugins import manager
-    plugin_name = data.get("plugin_name", "")
-    cam_id      = data.get("cam_id", "")
-    ok, msg = manager.remove_plugin(plugin_name, cam_id)
+    plugin_name  = data.get("plugin_name", "")
+    cam_id       = data.get("cam_id", "")
+    instance_key = data.get("instance_key", "")
+    ok, msg = manager.remove_plugin(plugin_name, cam_id, instance_key)
     emit("status", {"msg": msg})
     _emit_state_all()
 
