@@ -131,7 +131,7 @@ class RPiDriver(CameraDriver):
             controls["AnalogueGain"] = float(init.get("gain", 1.0))
 
         cfg = cam.create_video_configuration(
-            main={"size": (width, height), "format": "BGR888"},
+            main={"size": (width, height), "format": "RGB888"},
             controls=controls,
             buffer_count=4,
         )
