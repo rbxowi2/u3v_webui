@@ -1,0 +1,48 @@
+<!-- anaglyph/ui.html — injected into #sidebar by syncPluginArea -->
+<div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'\u25bc':'\u25b6'">
+  <span class="collapse-arrow">&#9654;</span>
+  <span>Anaglyph Stereo</span>
+</div>
+<div class="collapsible-body is-open">
+  <div style="padding:8px 12px;display:flex;flex-direction:column;gap:6px;">
+
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="font-size:11px;color:#aaa;width:36px;flex-shrink:0;">Left</label>
+      <select class="anaglyph-left-cam"
+        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+        onchange="anaglyphOnCam(this,'left')">
+        <option value="">-- none --</option>
+      </select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="font-size:11px;color:#aaa;width:36px;flex-shrink:0;">Right</label>
+      <select class="anaglyph-right-cam"
+        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+        onchange="anaglyphOnCam(this,'right')">
+        <option value="">-- none --</option>
+      </select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="font-size:11px;color:#aaa;white-space:nowrap;">Left channel</label>
+      <select class="anaglyph-channel"
+        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+        onchange="anaglyphOnChannel(this)">
+        <option value="1">Red / Blue</option>
+        <option value="0">Blue / Red</option>
+      </select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="font-size:11px;color:#aaa;white-space:nowrap;">Parallax</label>
+      <input type="range" class="anaglyph-parallax" min="-200" max="200" step="1" value="0"
+        style="flex:1;min-width:0;"
+        oninput="anaglyphOnParallax(this)">
+      <span class="anaglyph-parallax-label" style="font-size:11px;color:#aaa;min-width:28px;text-align:right;">0</span>
+    </div>
+
+    <button class="btn btn-blue" onclick="anaglyphShowWindow()">Show Window</button>
+
+  </div>
+</div>
