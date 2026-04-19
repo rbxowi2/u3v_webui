@@ -1,6 +1,6 @@
 # u3v-webui Developer Guide
 
-**Version:** 6.10.0  
+**Version:** 6.11.0  
 **Project:** Industrial Camera LAN WebUI — multi-camera, extensible
 
 ---
@@ -612,9 +612,9 @@ AppState._on_frame(frame, ts_ns, cam_id)
     ▼
 PluginManager.process_frame_for_camera(frame, ts_ns, cam_id)
     │
-    ├─ [pipeline mode plugins] → pipeline_frame  (saved to disk, feeds later plugins)
+    ├─ Phase 1: pipeline plugins (in list order) → pipeline_frame  (saved to disk)
     │
-    └─ [display mode plugins]  → display_frame   (streaming only, NOT saved)
+    └─ Phase 2: display plugins (in list order)  → display_frame   (streaming only)
     │
     ▼
 AppState._pipeline_frames[cam_id] = pipeline_frame   ← photo/record use this
@@ -625,24 +625,27 @@ AppState._display_frames[cam_id]  = display_frame    ← streaming uses this
 
 | Mode | Frame source | Result stored | Used by |
 |------|-------------|---------------|---------|
-| `"pipeline"` | Output of previous plugin | Yes (`_pipeline_frames`) | Recording, photo, downstream plugins |
-| `"display"` | Copy of current pipeline frame | No | Streaming to viewers only |
+| `"pipeline"` | Output of preceding pipeline plugins | Yes (`_pipeline_frames`) | Recording, photo |
+| `"display"` | Copy of final pipeline_frame | No | Streaming to viewers only |
 
 A plugin declared with `"display"` mode can add visual overlays, annotations, or previews without polluting saved files.
 
+**Two-phase execution** means display plugins always receive the fully-processed pipeline_frame as their base, regardless of where they appear in the pipeline list.  Interleaving pipeline and display plugins in the list is safe — the list order only affects execution order within each phase.
+
 ### 6.3 Per-Camera Plugin Pipeline
 
-Each camera maintains an ordered list of active plugins:
+Each camera maintains an ordered list of active plugins.  Each entry carries an `instance_key` that uniquely identifies the instance (equals `name` for single-instance plugins; auto-suffixed for multi-instance):
 
 ```python
 manager._pipeline[cam_id] = [
-    {"name": "basic_params",   "ptype": "local",  "mode": "pipeline"},
-    {"name": "basic_record",   "ptype": "local",  "mode": "pipeline"},
-    {"name": "overlay_text",   "ptype": "local",  "mode": "display"},
+    {"name": "BasicParams",  "instance_key": "BasicParams",    "ptype": "local", "mode": "pipeline"},
+    {"name": "BasicRecord",  "instance_key": "BasicRecord",    "ptype": "local", "mode": "pipeline"},
+    {"name": "OverlayText",  "instance_key": "OverlayText",    "ptype": "local", "mode": "display"},
+    {"name": "OverlayText",  "instance_key": "OverlayText_2",  "ptype": "local", "mode": "display"},
 ]
 ```
 
-Execution is strictly sequential within a single frame. Plugins see the output of all preceding pipeline-mode plugins.
+Within each phase, execution is strictly sequential in list order.
 
 **Global vs Local plugins:**
 
@@ -651,25 +654,29 @@ Execution is strictly sequential within a single frame. Plugins see the output o
 | `"global"` | One shared instance across all cameras | Cross-camera analytics |
 | `"local"` | One instance per camera | Per-camera parameters, recording |
 
+**Multi-instance plugins** set `PLUGIN_ALLOW_MULTIPLE = True` in `plugin.py`.  They may be added to the same camera multiple times; each instance receives a unique `instance_key` (e.g. `OverlayText`, `OverlayText_2`).  The instance key is injected into `_instance_key` on the plugin object and should be used to namespace state/param keys.
+
 ### 6.4 Example Execution Trace
 
 ```python
-# Pipeline: [BasicParams(pipeline), BasicRecord(pipeline), OverlayText(display)]
+# Pipeline list: [BasicParams(pipeline), OverlayText(display), BasicRecord(pipeline)]
+# After two-phase split:
+#   Phase 1 (pipeline): BasicParams → BasicRecord
+#   Phase 2 (display):  OverlayText
 
 pipeline_frame = raw_frame
 
-# Step 1 — BasicParams (pipeline)
+# Phase 1 — pipeline plugins in list order
 result = basic_params.on_frame(pipeline_frame, hw_ts_ns, "cam_1")
 if result is not None:
-    pipeline_frame = result          # modified frame propagates
+    pipeline_frame = result
 
-# Step 2 — BasicRecord (pipeline)
 result = basic_record.on_frame(pipeline_frame, hw_ts_ns, "cam_1")
 if result is not None:
     pipeline_frame = result          # saved to disk
 
-# Step 3 — OverlayText (display)
-display_frame = pipeline_frame.copy()   # branch off pipeline
+# Phase 2 — display plugins in list order
+display_frame = pipeline_frame.copy()   # branch off final pipeline result
 result = overlay_text.on_frame(display_frame, hw_ts_ns, "cam_1")
 if result is not None:
     display_frame = result           # only affects viewers
@@ -738,11 +745,12 @@ u3v_webui/plugins/my_plugin/
 ```python
 from .basic import MyPlugin
 
-PLUGIN_CLASS       = MyPlugin
-PLUGIN_NAME        = "my_plugin"         # unique identifier, used in API calls
-PLUGIN_TYPE        = "local"             # "local" or "global"
-PLUGIN_VERSION     = "1.0.0"
-PLUGIN_DESCRIPTION = "Does something useful"
+PLUGIN_CLASS          = MyPlugin
+PLUGIN_NAME           = "my_plugin"         # unique identifier, used in API calls
+PLUGIN_TYPE           = "local"             # "local" or "global"
+PLUGIN_VERSION        = "1.0.0"
+PLUGIN_DESCRIPTION    = "Does something useful"
+PLUGIN_ALLOW_MULTIPLE = False               # set True to allow multiple instances per camera
 ```
 
 ### 7.3 Implementation Class
@@ -841,14 +849,36 @@ class MyPlugin(PluginBase):
 
 ### 7.4 Pipeline Mode Declaration
 
-Pipeline mode is declared in `plugin.py`, not in the class itself:
+Default mode is set in `plugin.py` (the user can toggle it at runtime):
 
 ```python
-# plugin.py
+# plugin.py — optional; defaults to "pipeline" if absent
 PLUGIN_MODE = "pipeline"   # or "display"
 ```
 
-The `PluginManager` reads this when building the pipeline entry for the camera. If absent, defaults to `"pipeline"`.
+### 7.4a Multi-Instance Plugins
+
+Set `PLUGIN_ALLOW_MULTIPLE = True` in `plugin.py` to allow the user to add the plugin more than once to the same camera.
+
+Each instance is assigned a unique `instance_key` injected into `self._instance_key`.  Use it to namespace state and parameter keys so instances do not collide:
+
+```python
+def _sk(self, field: str) -> str:
+    ik = self._instance_key or self.name
+    suffix = "" if ik == self.name else f"_{ik}"
+    return f"my_plugin_{field}{suffix}"
+
+def get_state(self, cam_id=""):
+    return {self._sk("value"): self._value}
+
+def handle_set_param(self, key, value, driver):
+    if key == self._sk("value"):
+        self._value = value
+        return True
+    return False
+```
+
+The UI script reads `block.dataset.instance` to determine the instance key and builds param keys accordingly.
 
 ### 7.5 Background Work Pattern
 
