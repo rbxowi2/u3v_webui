@@ -1374,10 +1374,10 @@ window.addEventListener("orientationchange", () => {
 });
 
 // ── Plugin management ─────────────────────────────────────────────────────
-// _pluginUIsLocal[cam_id] tracks ALL plugin names rendered in that camera's
+// _pluginUIsLocal[cam_id] tracks ALL instance_keys rendered in that camera's
 // container (global + local ptype).  Globals are merged into the camera
 // container so the user can drag them into any pipeline position.
-const _pluginUIsLocal = {};    // cam_id → Set<plugin_name>
+const _pluginUIsLocal = {};    // cam_id → Set<instance_key>
 
 // Serialise syncPluginArea: only one invocation at a time; stale intermediate
 // states are dropped to prevent TOCTOU duplicate-DOM races.
@@ -1414,8 +1414,8 @@ async function _doSyncPluginArea(s) {
   if (!cam_id) return;
 
   // Full ordered pipeline for selected camera (globals + locals interleaved)
-  const pipeline     = ppState[cam_id] || ppState["_global_template"] || [];
-  const pipelineNames = new Set(pipeline.map(e => e.name));
+  const pipeline      = ppState[cam_id] || ppState["_global_template"] || [];
+  const pipelineKeys  = new Set(pipeline.map(e => e.instance_key || e.name));
 
   // Get or create camera container
   let container = document.querySelector(
@@ -1432,35 +1432,38 @@ async function _doSyncPluginArea(s) {
 
   // Add missing plugins
   for (const entry of pipeline) {
-    if (!_pluginUIsLocal[cam_id].has(entry.name)) {
-      await loadPluginUI(entry.name, entry.ptype, cam_id, container);
-      _pluginUIsLocal[cam_id].add(entry.name);
+    const ikey = entry.instance_key || entry.name;
+    if (!_pluginUIsLocal[cam_id].has(ikey)) {
+      await loadPluginUI(entry.name, ikey, entry.ptype, cam_id, container);
+      _pluginUIsLocal[cam_id].add(ikey);
     }
   }
 
   // Remove stale plugins
-  for (const name of [..._pluginUIsLocal[cam_id]]) {
-    if (!pipelineNames.has(name)) {
+  for (const ikey of [..._pluginUIsLocal[cam_id]]) {
+    if (!pipelineKeys.has(ikey)) {
       const el = container.querySelector(
-        `.plugin-ui-block[data-plugin="${CSS.escape(name)}"]`
+        `.plugin-ui-block[data-instance="${CSS.escape(ikey)}"]`
       );
       if (el) el.remove();
-      _pluginUIsLocal[cam_id].delete(name);
+      _pluginUIsLocal[cam_id].delete(ikey);
     }
   }
 
   // Sort DOM elements to match pipeline order (appendChild moves to end)
   pipeline.forEach(entry => {
+    const ikey = entry.instance_key || entry.name;
     const el = container.querySelector(
-      `.plugin-ui-block[data-plugin="${CSS.escape(entry.name)}"]`
+      `.plugin-ui-block[data-instance="${CSS.escape(ikey)}"]`
     );
     if (el) container.appendChild(el);
   });
 
   // Update order badge and mode button from latest state
   pipeline.forEach((entry, idx) => {
+    const ikey = entry.instance_key || entry.name;
     const el = container.querySelector(
-      `.plugin-ui-block[data-plugin="${CSS.escape(entry.name)}"]`
+      `.plugin-ui-block[data-instance="${CSS.escape(ikey)}"]`
     );
     if (!el) return;
     const badge = el.querySelector(".plugin-order-badge");
@@ -1475,19 +1478,20 @@ async function _doSyncPluginArea(s) {
 }
 
 // ── loadPluginUI ─────────────────────────────────────────────────────────────
-async function loadPluginUI(plugin_name, ptype, cam_id, container) {
+async function loadPluginUI(plugin_name, instance_key, ptype, cam_id, container) {
   const slug = plugin_name.toLowerCase().replace(/\s+/g, "");
   try {
     const resp = await fetch("/plugin/" + slug + "/ui.html");
     if (!resp.ok) return;
     const html = await resp.text();
     const div  = document.createElement("div");
-    div.className      = "plugin-ui-block";
-    div.dataset.plugin = plugin_name;
-    div.dataset.ptype  = ptype;
-    div.dataset.cam    = cam_id;
+    div.className         = "plugin-ui-block";
+    div.dataset.plugin    = plugin_name;
+    div.dataset.instance  = instance_key;
+    div.dataset.ptype     = ptype;
+    div.dataset.cam       = cam_id;
     div.setAttribute("draggable", "true");
-    div.innerHTML      = html;
+    div.innerHTML         = html;
 
     // Inject controls into first .collapsible-hdr / .section-title / heading
     const hdr = div.querySelector(".collapsible-hdr, .section-title, h3, h4");
@@ -1515,6 +1519,7 @@ async function loadPluginUI(plugin_name, ptype, cam_id, container) {
         const newMode = mb.dataset.mode === "pipeline" ? "display" : "pipeline";
         socket.emit("set_plugin_mode", {
           cam_id: div.dataset.cam,
+          instance_key,
           plugin_name,
           mode: newMode,
         });
@@ -1526,10 +1531,9 @@ async function loadPluginUI(plugin_name, ptype, cam_id, container) {
       rb.className   = "plugin-remove-btn";
       rb.textContent = "\u2715";
       rb.title       = "Remove plugin";
-      // Global plugins removed with cam_id="" (affects all cameras)
       rb.onclick = (e) => {
         e.stopPropagation();
-        onRemovePlugin(plugin_name, ptype === "local" ? cam_id : "");
+        onRemovePlugin(plugin_name, instance_key, ptype === "local" ? cam_id : "");
       };
       hdr.appendChild(rb);
     }
@@ -1605,9 +1609,9 @@ function _setupContainerDrop(container, cam_id) {
   container.addEventListener("drop", (e) => {
     e.preventDefault();
     if (!_dragSrc) return;
-    // Collect new order from DOM and emit
+    // Collect new order from DOM and emit (use instance_key for multi-instance support)
     const names = [...container.querySelectorAll(".plugin-ui-block")]
-      .map(b => b.dataset.plugin);
+      .map(b => b.dataset.instance || b.dataset.plugin);
     socket.emit("reorder_plugins", { cam_id, names });
   });
   container.addEventListener("dragover", (e) => {
@@ -1622,8 +1626,8 @@ function cleanupLocalPluginsUI(cam_id) {
   delete _pluginUIsLocal[cam_id];
 }
 
-function onRemovePlugin(plugin_name, cam_id) {
-  socket.emit("remove_plugin", { plugin_name, cam_id: cam_id || "" });
+function onRemovePlugin(plugin_name, instance_key, cam_id) {
+  socket.emit("remove_plugin", { plugin_name, instance_key, cam_id: cam_id || "" });
 }
 
 // ── Add-plugin modal ──────────────────────────────────────────────────────────
@@ -1636,7 +1640,7 @@ function openAddPluginModal() {
   const inPipeline = new Set(pipeline.map(e => e.name));
   const available  = s.available_plugins || [];
 
-  const localAvail  = available.filter(p => p.type === "local"  && !inPipeline.has(p.name));
+  const localAvail  = available.filter(p => p.type === "local"  && (!inPipeline.has(p.name) || p.allow_multiple));
   const globalAvail = available.filter(p => p.type === "global" && !inPipeline.has(p.name));
 
   const body = document.getElementById("add-plugin-list");
