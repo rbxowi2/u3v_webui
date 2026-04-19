@@ -108,6 +108,9 @@ class PluginManager:
                 ver            = getattr(mod, "PLUGIN_VERSION",        "0.1.0")
                 desc           = getattr(mod, "PLUGIN_DESCRIPTION",    "")
                 allow_multiple = getattr(mod, "PLUGIN_ALLOW_MULTIPLE", False)
+                default_mode   = getattr(mod, "PLUGIN_MODE",           "pipeline")
+                if default_mode not in ("pipeline", "display"):
+                    default_mode = "pipeline"
                 if cls is None or name is None:
                     log(f"[Plugin] {plugin_dir.name}: missing PLUGIN_CLASS/PLUGIN_NAME — skipped")
                     continue
@@ -116,6 +119,7 @@ class PluginManager:
                     "cls": cls, "type": ptype, "version": ver,
                     "description": desc, "dir": cls_dir,
                     "allow_multiple": allow_multiple,
+                    "default_mode":   default_mode,
                 }
                 log(f"[Plugin] Available: {name} v{ver} ({ptype})")
             except Exception as e:
@@ -139,6 +143,7 @@ class PluginManager:
         ptype          = info["type"]
         cls            = info["cls"]
         allow_multiple = info.get("allow_multiple", False)
+        default_mode   = info.get("default_mode", "pipeline")
 
         with self._lock:
             if ptype == "global":
@@ -149,12 +154,12 @@ class PluginManager:
                 instance._instance_key = instance_key
                 self._global[instance_key] = instance
                 self._global_order.append(
-                    {"name": plugin_name, "instance_key": instance_key, "mode": "pipeline"}
+                    {"name": plugin_name, "instance_key": instance_key, "mode": default_mode}
                 )
                 for cid in self._pipeline:
                     self._pipeline[cid].append({
                         "name": plugin_name, "instance_key": instance_key,
-                        "ptype": "global", "mode": "pipeline",
+                        "ptype": "global", "mode": default_mode,
                     })
             else:
                 if not cam_id:
@@ -187,7 +192,7 @@ class PluginManager:
                     ]
                 self._pipeline[cam_id].append({
                     "name": plugin_name, "instance_key": instance_key,
-                    "ptype": "local", "mode": "pipeline",
+                    "ptype": "local", "mode": default_mode,
                 })
 
         self._inject_ctx(instance)
