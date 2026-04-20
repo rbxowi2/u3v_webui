@@ -1,14 +1,4 @@
-"""
-plugins/base.py — Abstract PluginBase interface (6.0.0).
-
-Two plugin types:
-  "local"  — One instance per camera.  Holds per-camera state (e.g. Parameters).
-  "global" — One instance shared across all cameras.  Receives callbacks for every
-              camera event and routes internally by cam_id (e.g. Recording).
-
-All callbacks that were previously single-camera now accept an optional cam_id
-parameter so global plugins can route by camera.
-"""
+"""plugins/base.py — Abstract PluginBase interface (6.0.0)."""
 
 import inspect
 import os
@@ -51,14 +41,6 @@ class PluginBase(ABC):
     @property
     def description(self) -> str:
         return ""
-
-    @property
-    def plugin_type(self) -> str:
-        """
-        ``"local"``  — instantiated once per camera assignment.
-        ``"global"`` — single instance that receives events for all cameras.
-        """
-        return "local"
 
     # ── Lifecycle hooks ────────────────────────────────────────────────────────
 
