@@ -72,9 +72,6 @@ class BasicParamsPlugin(PluginBase):
     def description(self) -> str:
         return "Exposure, gain, FPS, auto modes"
 
-    @property
-    def plugin_type(self) -> str:
-        return "local"
 
     # ── Lifecycle hooks ───────────────────────────────────────────────────────
 
