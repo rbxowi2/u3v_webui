@@ -386,7 +386,7 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision、GigE | Aravis（GObject） |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class、V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI（Raspberry Pi，影片模式） | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | picamera2/libcamera |
 | `VirtualDriver` | `virtual_driver.py` | 合成幀（測試用） | NumPy |
 
 
