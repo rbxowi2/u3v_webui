@@ -47,9 +47,6 @@ class BasicPhoto(PluginBase):
     def description(self) -> str:
         return "Single-shot photo capture"
 
-    @property
-    def plugin_type(self) -> str:
-        return "local"
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

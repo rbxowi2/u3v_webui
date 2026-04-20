@@ -4,6 +4,5 @@ from .basic import BasicPhoto
 
 PLUGIN_CLASS       = BasicPhoto
 PLUGIN_NAME        = "BasicPhoto"
-PLUGIN_TYPE        = "local"
 PLUGIN_VERSION     = "1.1.0"
 PLUGIN_DESCRIPTION = "Single-shot photo capture"
