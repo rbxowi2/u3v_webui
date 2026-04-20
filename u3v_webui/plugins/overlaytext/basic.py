@@ -43,9 +43,6 @@ class OverlayTextPlugin(PluginBase):
     def description(self) -> str:
         return "Text overlay on camera frame (color, size, position)"
 
-    @property
-    def plugin_type(self) -> str:
-        return "local"
 
     # ── Key helpers ───────────────────────────────────────────────────────────
 
