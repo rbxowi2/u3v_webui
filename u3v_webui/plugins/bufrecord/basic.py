@@ -49,9 +49,6 @@ class BasicBufRecord(PluginBase):
     def description(self) -> str:
         return "RAM-buffer recording (accumulate then save)"
 
-    @property
-    def plugin_type(self) -> str:
-        return "local"
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
