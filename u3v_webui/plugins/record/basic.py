@@ -101,9 +101,6 @@ class BasicRecord(PluginBase):
     def description(self) -> str:
         return "Continuous frame-by-frame recording"
 
-    @property
-    def plugin_type(self) -> str:
-        return "local"
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -130,6 +127,15 @@ class BasicRecord(PluginBase):
         with self._lock:
             if not self._recording or self._pp_buf is None:
                 return None
+            fh, fw = frame.shape[:2]
+            # Source plugins (MultiView, Anaglyph) may produce a different
+            # resolution than the virtual camera's native size.  Reallocate
+            # the ping-pong buffer whenever the frame shape changes.
+            if self._pp_buf.shape[1:3] != (fh, fw):
+                self._pp_buf = np.zeros((2, fh, fw, 3), dtype=np.uint8)
+                self._cam_w, self._cam_h = fw, fh
+                if self._disk_thread is not None:
+                    self._disk_thread.buf = self._pp_buf
             slot = self._pp_wslot
             self._pp_ts[slot] = hw_ts_ns
             np.copyto(self._pp_buf[slot], frame)
