@@ -6,10 +6,15 @@ Requires:  picamera2  (apt install python3-picamera2  or  pip install picamera2)
 
 Difference from rpi_driver.py
 ------------------------------
-This driver uses create_still_configuration() instead of create_video_configuration()
-and calls capture_array("main") once per frame.  Still mode can access the full
-sensor resolution without the constraints of the video pipeline.  FPS is controlled
-by sleep timing in the acquisition loop rather than FrameDurationLimits.
+Uses create_still_configuration() + capture_request() for synchronous single-shot
+capture.  Still mode can access the full sensor resolution without the constraints
+of the video pipeline.
+
+Frame rate is determined entirely by the exposure time — capture_request() blocks
+until the shutter closes.  There is no fps parameter.
+
+capture_request() is preferred over capture_array() + capture_metadata() because
+it returns the frame and metadata atomically from the same hardware exposure.
 
 Multi-camera
 ------------
@@ -34,27 +39,25 @@ class RPiImgDriver(CameraDriver):
     """
     Raspberry Pi CSI camera in still/photo capture mode via picamera2.
 
-    Produces BGR888 frames at the requested resolution.  Each frame is a
-    synchronous single-shot capture; FPS is governed by sleep timing.
+    Each frame is a synchronous single-shot capture via capture_request().
+    The achieved frame rate is determined by the exposure time.
     """
 
     SUPPORTED_PARAMS: frozenset = frozenset({
-        "exposure", "gain", "fps",
+        "exposure", "gain",
         "exposure_auto", "gain_auto",
     })
 
     DEFAULT_PARAMS: dict = {
-        "exposure":      20000.0,   # µs
+        "exposure":      20_000.0,  # µs
         "gain":          1.0,
-        "fps":           30.0,
         "exposure_auto": True,
         "gain_auto":     True,
     }
 
     _FALLBACK_BOUNDS: dict = {
-        "exp_min":  100.0,       "exp_max":  1_000_000.0,
-        "gain_min": 1.0,         "gain_max": 16.0,
-        "fps_min":  0.5,         "fps_max":  60.0,
+        "exp_min":  100.0,  "exp_max":  1_000_000.0,
+        "gain_min": 1.0,    "gain_max": 16.0,
     }
 
     def __init__(self):
@@ -69,11 +72,10 @@ class RPiImgDriver(CameraDriver):
         self._gain_auto        = True
         self._current_exposure = float(self.DEFAULT_PARAMS["exposure"])
         self._current_gain     = float(self.DEFAULT_PARAMS["gain"])
-        self._frame_interval   = 1.0 / float(self.DEFAULT_PARAMS["fps"])
         self._running          = False
 
-        self._fps_buf: deque        = deque()
-        self._cap_fps_val: float    = 0.0
+        self._fps_buf: deque           = deque()
+        self._cap_fps_val: float       = 0.0
         self._latest: Optional[np.ndarray] = None
 
     # ── Device discovery ───────────────────────────────────────────────────────
@@ -112,10 +114,8 @@ class RPiImgDriver(CameraDriver):
         init = self._init_params
         width  = int(init.get("width",  0))    # 0 = sensor default
         height = int(init.get("height", 0))
-        fps    = float(init.get("fps", self.DEFAULT_PARAMS["fps"]))
         self._exposure_auto = bool(init.get("exposure_auto", True))
         self._gain_auto     = bool(init.get("gain_auto",     True))
-        self._frame_interval = 1.0 / max(fps, 0.1)
 
         cam = Picamera2(camera_num=self._cam_num)
 
@@ -124,7 +124,7 @@ class RPiImgDriver(CameraDriver):
             controls["AeEnable"] = True
         else:
             controls["AeEnable"]     = False
-            controls["ExposureTime"] = int(float(init.get("exposure", 20000)))
+            controls["ExposureTime"] = int(float(init.get("exposure", 20_000)))
         if not self._gain_auto:
             controls["AnalogueGain"] = float(init.get("gain", 1.0))
 
@@ -180,12 +180,11 @@ class RPiImgDriver(CameraDriver):
     # ── Native mode query ──────────────────────────────────────────────────────
 
     def query_native_modes(self) -> list:
-        # FPS is controlled by sleep timing, not sensor mode — omit fps field
-        # so the UI resolution picker shows only resolution options.
+        """Return sensor resolutions without fps (rate is exposure-controlled)."""
         if self._cam is None:
             return []
         try:
-            seen = set()
+            seen  = set()
             modes = []
             for m in self._cam.sensor_modes:
                 size = m.get("size") or m.get("output_size")
@@ -208,11 +207,15 @@ class RPiImgDriver(CameraDriver):
         fail_count = 0
         try:
             while self._running:
-                t_start = time.time()
                 self._apply_pending()
 
                 try:
-                    frame = self._cam.capture_array("main")
+                    # capture_request() returns frame + metadata from the same
+                    # hardware exposure atomically.  Blocks until shutter closes.
+                    req   = self._cam.capture_request()
+                    frame = req.make_array("main")
+                    meta  = req.get_metadata()
+                    req.release()
                 except Exception:
                     if not self._running:
                         break
@@ -226,29 +229,19 @@ class RPiImgDriver(CameraDriver):
                     continue
 
                 fail_count = 0
-                hw_ts_ns = time.time_ns()
 
-                # Read back actual exposure/gain from metadata when available.
-                try:
-                    meta = self._cam.capture_metadata()
-                    if meta:
-                        if "ExposureTime" in meta:
-                            self._current_exposure = float(meta["ExposureTime"])
-                        if "AnalogueGain" in meta:
-                            self._current_gain = float(meta["AnalogueGain"])
-                except Exception:
-                    pass
+                # Prefer hardware sensor timestamp; fall back to software clock.
+                hw_ts_ns = meta.get("SensorTimestamp", time.time_ns())
+
+                if "ExposureTime" in meta:
+                    self._current_exposure = float(meta["ExposureTime"])
+                if "AnalogueGain" in meta:
+                    self._current_gain = float(meta["AnalogueGain"])
 
                 self._latest = frame
                 if self.on_frame is not None:
                     self.on_frame(frame, hw_ts_ns)
                 self._update_cap_fps()
-
-                # Sleep to honour target FPS.
-                elapsed = time.time() - t_start
-                remain  = self._frame_interval - elapsed
-                if remain > 0:
-                    time.sleep(remain)
 
         finally:
             cam, self._cam = self._cam, None
@@ -287,8 +280,6 @@ class RPiImgDriver(CameraDriver):
                     controls["ExposureTime"] = int(float(value))
                 elif key == "gain" and not self._gain_auto:
                     controls["AnalogueGain"] = float(value)
-                elif key == "fps":
-                    self._frame_interval = 1.0 / max(float(value), 0.1)
             except Exception as e:
                 print(f"[RPiImgDriver] set {key}={value} failed: {e}", flush=True)
 
