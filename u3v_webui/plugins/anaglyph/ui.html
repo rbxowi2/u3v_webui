@@ -6,34 +6,61 @@
 <div class="collapsible-body is-open">
   <div style="padding:8px 12px;display:flex;flex-direction:column;gap:6px;">
 
-    <div style="display:flex;align-items:center;gap:6px;">
-      <label style="font-size:11px;color:#aaa;width:36px;flex-shrink:0;">Left</label>
+    <!-- Left camera + source -->
+    <div style="display:flex;align-items:center;gap:4px;">
+      <label style="font-size:11px;color:#aaa;width:32px;flex-shrink:0;">Left</label>
       <select class="anaglyph-left-cam"
-        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+        style="flex:1;min-width:0;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
         onchange="anaglyphOnCam(this,'left')">
         <option value="">-- none --</option>
       </select>
+      <select class="anaglyph-left-src"
+        style="width:70px;flex-shrink:0;font-size:11px;padding:2px 3px;background:#2d2d2d;color:#aaa;border:1px solid #555;border-radius:3px;outline:none;"
+        onchange="anaglyphOnSource(this,'left')">
+        <option value="pipeline">Pipeline</option>
+        <option value="display">Display</option>
+      </select>
     </div>
 
-    <div style="display:flex;align-items:center;gap:6px;">
-      <label style="font-size:11px;color:#aaa;width:36px;flex-shrink:0;">Right</label>
+    <!-- Right camera + source -->
+    <div style="display:flex;align-items:center;gap:4px;">
+      <label style="font-size:11px;color:#aaa;width:32px;flex-shrink:0;">Right</label>
       <select class="anaglyph-right-cam"
-        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+        style="flex:1;min-width:0;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
         onchange="anaglyphOnCam(this,'right')">
         <option value="">-- none --</option>
       </select>
-    </div>
-
-    <div style="display:flex;align-items:center;gap:6px;">
-      <label style="font-size:11px;color:#aaa;white-space:nowrap;">Left channel</label>
-      <select class="anaglyph-channel"
-        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
-        onchange="anaglyphOnChannel(this)">
-        <option value="1">Red / Blue</option>
-        <option value="0">Blue / Red</option>
+      <select class="anaglyph-right-src"
+        style="width:70px;flex-shrink:0;font-size:11px;padding:2px 3px;background:#2d2d2d;color:#aaa;border:1px solid #555;border-radius:3px;outline:none;"
+        onchange="anaglyphOnSource(this,'right')">
+        <option value="pipeline">Pipeline</option>
+        <option value="display">Display</option>
       </select>
     </div>
 
+    <!-- Color mode -->
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="font-size:11px;color:#aaa;white-space:nowrap;">Color</label>
+      <select class="anaglyph-color"
+        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+        onchange="anaglyphOnColor(this)">
+        <option value="rc">Red / Cyan</option>
+        <option value="rb">Red / Blue</option>
+      </select>
+    </div>
+
+    <!-- Left eye channel -->
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="font-size:11px;color:#aaa;white-space:nowrap;">L eye</label>
+      <select class="anaglyph-channel"
+        style="flex:1;font-size:12px;padding:2px 4px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:3px;outline:none;"
+        onchange="anaglyphOnChannel(this)">
+        <option value="1">Red</option>
+        <option value="0">Cyan / Blue</option>
+      </select>
+    </div>
+
+    <!-- Parallax -->
     <div style="display:flex;align-items:center;gap:6px;">
       <label style="font-size:11px;color:#aaa;white-space:nowrap;">Parallax</label>
       <input type="range" class="anaglyph-parallax" min="-200" max="200" step="1" value="0"
@@ -41,8 +68,6 @@
         oninput="anaglyphOnParallax(this)">
       <span class="anaglyph-parallax-label" style="font-size:11px;color:#aaa;min-width:28px;text-align:right;">0</span>
     </div>
-
-    <button class="btn btn-blue" onclick="anaglyphShowWindow()">Show Window</button>
 
   </div>
 </div>
