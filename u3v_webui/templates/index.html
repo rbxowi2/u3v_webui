@@ -661,7 +661,7 @@ input[type="range"] { width: 100%; accent-color: #3a7bd5; cursor: pointer; }
 /* MDI minimized state — content hidden, window collapses to titlebar */
 .mdi-win.minimized .mdi-content { display: none !important; }
 .mdi-win.minimized .mdi-resize  { display: none !important; }
-.mdi-win.minimized { height: auto !important; }
+.mdi-win.minimized { height: auto !important; min-height: 0 !important; }
 
 /* MDI: suppress browser scroll/zoom interference during touch drag */
 .mdi-titlebar { touch-action: none; }
@@ -818,11 +818,7 @@ input[type="range"] { width: 100%; accent-color: #3a7bd5; cursor: pointer; }
       <button id="btn-add-plugin" title="Add plugin" onclick="openAddPluginModal()">+</button>
     </div>
 
-    <!-- Local plugin containers (one per camera, shown for selected only) -->
     <div id="local-plugins-area"></div>
-
-    <!-- Global plugins (always visible) -->
-    <div id="global-plugins"></div>
     {% endif %}
 
   </div><!-- end sidebar-body -->
@@ -1171,13 +1167,18 @@ function removeMdiWindow(cam_id) {
   if (win) win.remove();
   delete _mdiMaxState[cam_id];
   delete _mdiMinState[cam_id];
+  delete _mdiMinSaved[cam_id];
+  _layoutMinimizedWindows();
 }
 
 function mdiReset(cam_id) {
   const win = document.querySelector(`.mdi-win[data-cam="${CSS.escape(cam_id)}"]`);
   if (!win) return;
+  // If minimized, restore first (clears minimized class + resumes stream)
+  if (_mdiMinState[cam_id]) mdiToggleMin(cam_id);
   delete _mdiMaxState[cam_id];
   win.querySelector(".max-btn").textContent = "\u29c3";
+  win.classList.remove("minimized");
   win.style.left = "16px"; win.style.top = "16px";
   win.style.width = MDI_W + "px"; win.style.height = MDI_H + "px";
   requestAnimationFrame(() => _emitStreamSize(cam_id));
@@ -1211,6 +1212,22 @@ function mdiToggleMax(cam_id) {
 
 // MDI minimize
 const _mdiMinState = {};   // cam_id → true when minimized
+const _mdiMinSaved = {};   // cam_id → {left, top, w, h} before minimize
+
+const _MDI_MIN_W = 220;    // compact width of a minimized title bar
+
+function _layoutMinimizedWindows() {
+  const ws = document.getElementById("workspace");
+  if (!ws) return;
+  const wsH = ws.clientHeight;
+  let x = 4;
+  document.querySelectorAll(".mdi-win.minimized").forEach(win => {
+    win.style.left  = x + "px";
+    win.style.top   = (wsH - 32) + "px";
+    win.style.width = _MDI_MIN_W + "px";
+    x += _MDI_MIN_W + 4;
+  });
+}
 
 function mdiToggleMin(cam_id) {
   const win = document.querySelector(`.mdi-win[data-cam="${CSS.escape(cam_id)}"]`);
@@ -1218,17 +1235,31 @@ function mdiToggleMin(cam_id) {
   const btn = win.querySelector(".min-btn");
   if (_mdiMinState[cam_id]) {
     // Restore
+    const saved = _mdiMinSaved[cam_id];
+    if (saved) {
+      win.style.left   = saved.left;
+      win.style.top    = saved.top;
+      win.style.width  = saved.w;
+      win.style.height = saved.h;
+    }
     delete _mdiMinState[cam_id];
+    delete _mdiMinSaved[cam_id];
     win.classList.remove("minimized");
     if (btn) btn.innerHTML = "&#8722;";
     socket.emit("set_stream_paused", { cam_id, paused: false });
     requestAnimationFrame(() => _emitStreamSize(cam_id));
+    _layoutMinimizedWindows();  // re-compact remaining minimized windows
   } else {
-    // Minimize
+    // Save current position/size then minimize
+    _mdiMinSaved[cam_id] = {
+      left: win.style.left, top: win.style.top,
+      w: win.style.width,   h: win.style.height,
+    };
     _mdiMinState[cam_id] = true;
     win.classList.add("minimized");
     if (btn) btn.innerHTML = "&#9723;";
     socket.emit("set_stream_paused", { cam_id, paused: true });
+    _layoutMinimizedWindows();  // snap all minimized windows to bottom row
   }
 }
 
@@ -1361,6 +1392,7 @@ function mobileStreamClear() {
 
 // Re-emit stream sizes when the browser window is resized
 window.addEventListener("resize", () => {
+  _layoutMinimizedWindows();
   _openCamIds.forEach(cam_id => _emitStreamSize(cam_id));
   _syncMobileStreamPause();
 });
@@ -1374,9 +1406,7 @@ window.addEventListener("orientationchange", () => {
 });
 
 // ── Plugin management ─────────────────────────────────────────────────────
-// _pluginUIsLocal[cam_id] tracks ALL instance_keys rendered in that camera's
-// container (global + local ptype).  Globals are merged into the camera
-// container so the user can drag them into any pipeline position.
+// _pluginUIsLocal[cam_id] tracks all instance_keys rendered in that camera's container.
 const _pluginUIsLocal = {};    // cam_id → Set<instance_key>
 
 // Serialise syncPluginArea: only one invocation at a time; stale intermediate
@@ -1408,13 +1438,10 @@ async function _doSyncPluginArea(s) {
   document.querySelectorAll(".local-plugins-container").forEach(c => {
     c.style.display = (c.dataset.cam === cam_id) ? "" : "none";
   });
-  // Global-plugins div is no longer used (globals live in camera containers)
-  document.getElementById("global-plugins").innerHTML = "";
 
   if (!cam_id) return;
 
-  // Full ordered pipeline for selected camera (globals + locals interleaved)
-  const pipeline      = ppState[cam_id] || ppState["_global_template"] || [];
+  const pipeline      = ppState[cam_id] || [];
   const pipelineKeys  = new Set(pipeline.map(e => e.instance_key || e.name));
 
   // Get or create camera container
@@ -1434,7 +1461,7 @@ async function _doSyncPluginArea(s) {
   for (const entry of pipeline) {
     const ikey = entry.instance_key || entry.name;
     if (!_pluginUIsLocal[cam_id].has(ikey)) {
-      await loadPluginUI(entry.name, ikey, entry.ptype, cam_id, container);
+      await loadPluginUI(entry.name, ikey, cam_id, container);
       _pluginUIsLocal[cam_id].add(ikey);
     }
   }
@@ -1478,7 +1505,7 @@ async function _doSyncPluginArea(s) {
 }
 
 // ── loadPluginUI ─────────────────────────────────────────────────────────────
-async function loadPluginUI(plugin_name, instance_key, ptype, cam_id, container) {
+async function loadPluginUI(plugin_name, instance_key, cam_id, container) {
   const slug = plugin_name.toLowerCase().replace(/\s+/g, "");
   try {
     const resp = await fetch("/plugin/" + slug + "/ui.html");
@@ -1488,7 +1515,6 @@ async function loadPluginUI(plugin_name, instance_key, ptype, cam_id, container)
     div.className         = "plugin-ui-block";
     div.dataset.plugin    = plugin_name;
     div.dataset.instance  = instance_key;
-    div.dataset.ptype     = ptype;
     div.dataset.cam       = cam_id;
     div.setAttribute("draggable", "true");
     div.innerHTML         = html;
@@ -1533,7 +1559,7 @@ async function loadPluginUI(plugin_name, instance_key, ptype, cam_id, container)
       rb.title       = "Remove plugin";
       rb.onclick = (e) => {
         e.stopPropagation();
-        onRemovePlugin(plugin_name, instance_key, ptype === "local" ? cam_id : "");
+        onRemovePlugin(plugin_name, instance_key, cam_id);
       };
       hdr.appendChild(rb);
     }
@@ -1636,33 +1662,21 @@ function openAddPluginModal() {
   const s        = _stateCache;
   const cam_id   = (s.selected_cam_id && s.cameras && s.cameras[s.selected_cam_id])
                    ? s.selected_cam_id : "";
-  const pipeline = ((s.plugin_pipeline || {})[cam_id] || []);
+  const pipeline  = ((s.plugin_pipeline || {})[cam_id] || []);
   const inPipeline = new Set(pipeline.map(e => e.name));
   const available  = s.available_plugins || [];
 
-  const localAvail  = available.filter(p => p.type === "local"  && (!inPipeline.has(p.name) || p.allow_multiple));
-  const globalAvail = available.filter(p => p.type === "global" && !inPipeline.has(p.name));
+  const avail = available.filter(p => !inPipeline.has(p.name) || p.allow_multiple);
 
   const body = document.getElementById("add-plugin-list");
   body.innerHTML = "";
 
-  if (localAvail.length + globalAvail.length === 0) {
+  if (!cam_id) {
+    body.innerHTML = '<p class="rec-empty">Select an open camera to add plugins.</p>';
+  } else if (avail.length === 0) {
     body.innerHTML = '<p class="rec-empty">No additional plugins available.</p>';
   } else {
-    if (localAvail.length > 0 && cam_id) {
-      const sec = document.createElement("div");
-      sec.className = "plugin-modal-section";
-      sec.textContent = "Local (camera: " + cam_id + ")";
-      body.appendChild(sec);
-      localAvail.forEach(p => body.appendChild(makePluginItem(p, cam_id)));
-    }
-    if (globalAvail.length > 0) {
-      const sec = document.createElement("div");
-      sec.className = "plugin-modal-section";
-      sec.textContent = "Global (all cameras)";
-      body.appendChild(sec);
-      globalAvail.forEach(p => body.appendChild(makePluginItem(p, "")));
-    }
+    avail.forEach(p => body.appendChild(makePluginItem(p, cam_id)));
   }
   document.getElementById("add-plugin-overlay").classList.add("open");
 }
