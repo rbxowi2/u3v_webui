@@ -1,7 +1,6 @@
 # u3v-webui Developer Guide
 
 **Version:** 6.12.0 / Plugin suite 2025-04  
-**Project:** Industrial Camera LAN WebUI — multi-camera, extensible
 
 ---
 
