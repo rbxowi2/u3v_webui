@@ -1,5 +1,5 @@
 """
-plugins/__init__.py — PluginManager: runtime plugin registry (6.13.1).
+plugins/__init__.py — PluginManager: runtime plugin registry (6.13.2).
 
 Plugin discovery contract
 -------------------------
@@ -398,12 +398,10 @@ class PluginManager:
         """Return True if any plugin assigned to cam_id is busy."""
         return any(p.is_busy(cam_id) for p in self._iter_instances(cam_id))
 
-    def collect_held_cam_ids(self) -> set:
-        """Return all cam_ids that any active plugin requires to stay open."""
-        with self._lock:
-            all_instances = [inst for d in self._local.values() for inst in d.values()]
+    def collect_held_cam_ids_for_camera(self, cam_id: str) -> set:
+        """Return cam_ids that plugins assigned to cam_id require to stay open."""
         held: set = set()
-        for inst in all_instances:
+        for inst in self._iter_instances(cam_id):
             held |= inst.held_cam_ids()
         return held
 
