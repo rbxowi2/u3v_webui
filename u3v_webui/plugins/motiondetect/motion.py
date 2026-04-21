@@ -117,6 +117,9 @@ class MotionDetect(PluginBase):
         self._save_zones(self._cam_id)
         return True, "Zones saved"
 
+    def is_busy(self, cam_id: str = "") -> bool:
+        return self._enabled and self._running
+
     def handle_set_param(self, key: str, value, driver) -> bool:
         if key == "motdet_enabled":
             enabled = bool(value)
@@ -126,6 +129,7 @@ class MotionDetect(PluginBase):
                 self._start_thread()
             else:
                 self._stop_thread()
+                self._mark_idle(self._cam_id)
             return True
         if key == "motdet_var_threshold":
             v = int(value)
