@@ -274,6 +274,22 @@ state._stream_paused[(cam_id, sid)]    # 本觀看者的串流暫停旗標
 - 下一位觀看者連線時，這些相機會**自動重開**。
 - 伺服器啟動時所有相機預設為 `_manual_closed=True`，**不會自動開啟**。
 
+**來源相機保護（`held_cam_ids`）：**  
+跨相機合成插件（如 `MultiView`）覆寫 `held_cam_ids() -> set`，宣告它所依賴的相機 ID。`try_auto_close_all()` 採用兩階段演算法：
+
+1. 找出所有「自身有忙碌插件」的相機（`busy_cams`）。
+2. 僅從這些忙碌相機出發，收集其插件的 `held_cam_ids()`，形成保護集合。
+
+來源相機只在**消費者相機本身也是忙碌的**條件下才受保護。
+
+| 虛擬相機 A 的插件狀態 | 來源相機 B 狀態 | 無人登入時結果 |
+|----------------------|---------------|--------------|
+| 只掛 MultiView | 無忙碌插件 | **A 和 B 都關閉** |
+| MultiView + MotionDetect（已啟用） | 無忙碌插件 | **A 和 B 都保持開啟** |
+| MultiView + MotionDetect（未啟用） | 無忙碌插件 | **A 和 B 都關閉** |
+| MultiView + 錄影（進行中） | 無忙碌插件 | **A 和 B 都保持開啟** |
+| 只掛 MultiView | B 自身有錄影進行中 | A 關閉，**B 保持開啟**（B 本身忙碌） |
+
 ---
 
 ## 4. 硬體抽象層（HAL）
@@ -386,9 +402,10 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision、GigE | Aravis（GObject） |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class、V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI（Raspberry Pi，影片模式） | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | picamera2/libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | libcamera |
 | `VirtualDriver` | `virtual_driver.py` | 合成幀（測試用） | NumPy |
 
+> **靜態拍照模式說明：** `RPiImgDriver` 完全以 `time.sleep()` 控制幀率，不使用感測器定時暫存器。其 `query_native_modes()` 回傳的每筆記錄只含 `{"width": w, "height": h}`，**不含** `"fps"` 欄位；UI 在此類模式下會隱藏 fps 欄。
 
 ### 4.6 驅動自動探索
 
@@ -827,6 +844,15 @@ class MyPlugin(PluginBase):
         適用於有背景執行緒正在儲存資料的情況。
         """
         return False
+
+    # --- 來源相機依賴宣告 ---
+    def held_cam_ids(self) -> set:
+        """
+        回傳此插件需要保持開啟的 cam_id 集合。
+        跨相機合成插件（如 MultiView）需覆寫此方法，
+        防止來源相機在無人登入時被自動關閉。
+        """
+        return set()
 ```
 
 ### 7.4 Pipeline 模式宣告
@@ -915,6 +941,20 @@ frames = [
     for i in range(n)
 ]
 ```
+
+**`held_cam_ids()` — 來源相機依賴宣告：**  
+覆寫此方法列出插件所讀取的相機。保護以消費者相機是否忙碌為前提——詳見 §3.5 表格。
+
+```python
+def held_cam_ids(self) -> set:
+    with self._lock:
+        return {c for c in self._source_cams if c}
+```
+
+| 消費者相機是否忙碌 | `held_cam_ids()` 是否生效 | 來源相機是否自動關閉 |
+|-----------------|--------------------------|------------------|
+| 是（如 MotionDetect 執行中） | 是 | 否，保持開啟 |
+| 否（只掛 MultiView，閒置） | 否 | 是，正常關閉 |
 
 ### 7.5 背景工作模式
 
@@ -1017,18 +1057,21 @@ def register_routes(self, app, sio, ctx):
 
 ## 附錄：內建插件參考
 
-| 插件 | PLUGIN_NAME | 類型 | 模式 | 主要動作 | 主要參數 |
-|------|------------|------|------|---------|---------|
-| `BasicPhoto` | `BasicPhoto` | local | pipeline | `take_photo` | `photo_fmt` |
-| `BasicRecord` | `BasicRecord` | local | pipeline | `toggle_record` | `rec_fmt` |
-| `BasicBufRecord` | `BasicBufRecord` | local | pipeline | `toggle_buf_record` | `buf_fmt` |
-| `BasicParams` | `BasicParams` | local | pipeline | — | `exposure`、`gain`、`fps`、`exposure_auto`、`gain_auto`、`exp_auto_upper` |
-| `OverlayText` | `OverlayText` | local | display | — | `overlay_text` |
-| `MultiView` | `MultiView` | source | pipeline | — | `multiview_layout`、`multiview_cam_1..4`、`multiview_src_1..4`、`multiview_res` |
-| `Anaglyph` | `Anaglyph` | source | pipeline | — | `anaglyph_left_cam`、`anaglyph_right_cam`、`anaglyph_left_source`、`anaglyph_right_source`、`anaglyph_color_mode`、`anaglyph_left_is_red`、`anaglyph_parallax` |
+| 插件 | PLUGIN_NAME | 版本 | 類型 | 模式 | 主要動作 | 主要參數 |
+|------|------------|------|------|------|---------|---------|
+| `BasicPhoto` | `BasicPhoto` | — | local | pipeline | `take_photo` | `photo_fmt` |
+| `BasicRecord` | `BasicRecord` | — | local | pipeline | `toggle_record` | `rec_fmt` |
+| `BasicBufRecord` | `BasicBufRecord` | — | local | pipeline | `toggle_buf_record` | `buf_fmt` |
+| `BasicParams` | `BasicParams` | — | local | pipeline | — | `exposure`、`gain`、`fps`、`exposure_auto`、`gain_auto`、`exp_auto_upper` |
+| `OverlayText` | `OverlayText` | — | local | display | — | `overlay_text` |
+| `MultiView` | `MultiView` | 1.1.1 | source | pipeline | — | `multiview_layout`、`multiview_cam_1..4`、`multiview_src_1..4`、`multiview_res` |
+| `Anaglyph` | `Anaglyph` | — | source | pipeline | — | `anaglyph_left_cam`、`anaglyph_right_cam`、`anaglyph_left_source`、`anaglyph_right_source`、`anaglyph_color_mode`、`anaglyph_left_is_red`、`anaglyph_parallax` |
+| `MotionDetect` | `MotionDetect` | 1.0.3 | local | pipeline | `motdet_save_zones` | `motdet_enabled`、`motdet_var_threshold`、`motdet_min_pixel_count`、`motdet_cooldown_sec` |
 
-**來源插件**（`MultiView`、`Anaglyph`）專為 **VirtualDriver** 相機設計，從其他相機合成畫面後回傳，虛擬相機的 dummy 幀將被丟棄。`BasicRecord` 會自動重新分配 ping-pong 緩衝區以符合合成幀尺寸，錄製來源插件輸出無需額外設定。
+**來源插件**（`MultiView`、`Anaglyph`）專為 **VirtualDriver** 相機設計，從其他相機合成畫面後回傳，虛擬相機的 dummy 幀將被丟棄。`BasicRecord` 會自動重新分配 ping-pong 緩衝區以符合合成幀尺寸，錄製來源插件輸出無需額外設定。兩個來源插件均實作 `held_cam_ids()` 宣告來源相機依賴。
+
+**MotionDetect** 在背景執行緒以 10 Hz 對縮小版 pipeline 幀進行 MOG2 偵測。在任一配置區域偵測到動作時，儲存全解析度 JPEG 至 `captures/<YYYYMMDD>/motdet_<cam_safe>_<時間戳_微秒>.jpg`。各相機實例的偵測區域（儲存於 `captures/motdet_zones/<cam_safe>_zones.json`）、冷卻計時器與偵測執行緒完全獨立，同時觸發時不會互相干擾。
 
 ---
 
-*本文件對應 u3v-webui 版本 6.12.0。*
+*本文件對應 u3v-webui 版本 6.13.2。*

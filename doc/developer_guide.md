@@ -277,10 +277,29 @@ state._stream_paused[(cam_id, sid)]    # per-viewer stream pause flag
 
 ### 3.5 Auto-Open / Auto-Close
 
-- Cameras **auto-close** when the last viewer disconnects AND no plugin reports `is_busy()`.
-- If an admin had previously opened a camera (`_manual_closed=False`), it is tracked in `_auto_reopen_cams`.
-- On the **next viewer connect**, those cameras auto-reopen.
-- Cameras start in `_manual_closed=True` — **no auto-open at startup**.
+| Event | Action |
+|-------|--------|
+| Admin opens camera | Added to `_auto_reopen_cams` |
+| Admin explicitly closes camera | Removed from `_auto_reopen_cams` |
+| Last viewer disconnects (no busy plugins) | Camera auto-closes; `_auto_reopen_cams` entry **preserved** |
+| Next viewer connects | Cameras in `_auto_reopen_cams` that are not open are reopened |
+| Server starts | `_auto_reopen_cams` is empty — no cameras open automatically |
+
+**Source-camera protection (`held_cam_ids`):**  
+Cross-camera plugins (e.g. `MultiView`) declare which cameras they depend on by overriding `held_cam_ids() -> set`.  `try_auto_close_all()` uses a two-step algorithm:
+
+1. Find all cameras that have at least one busy plugin (`busy_cams`).
+2. For each busy camera, expand the protected set with its plugins' `held_cam_ids()`.
+
+A source camera is protected only when its **consumer camera is itself busy**.
+
+| Virtual cam A plugins | Source cam B state | Result when no viewers |
+|-----------------------|--------------------|------------------------|
+| MultiView only | no busy plugins | **Both A and B close** |
+| MultiView + MotionDetect (enabled) | no busy plugins | **Both stay open** |
+| MultiView + MotionDetect (disabled) | no busy plugins | **Both A and B close** |
+| MultiView + Recording (active) | no busy plugins | **Both stay open** |
+| MultiView only | B has Recording active | A closes, **B stays open** (B is busy itself) |
 
 ---
 
@@ -393,9 +412,10 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision, GigE | Aravis (GObject) |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class, V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI (Raspberry Pi, video mode) | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | picamera2/libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | libcamera |
 | `VirtualDriver` | `virtual_driver.py` | Synthetic (test) | NumPy |
 
+> **Still-mode note:** `RPiImgDriver` controls FPS entirely via `time.sleep()` rather than sensor timing registers.  Its `query_native_modes()` returns `{"width": w, "height": h}` entries **without** an `"fps"` key; the UI omits the fps column for these modes.
 
 ### 4.6 Driver Auto-Discovery
 
@@ -845,6 +865,15 @@ class MyPlugin(PluginBase):
         Use this when the plugin is saving data in a background thread.
         """
         return False
+
+    # --- Source-camera dependency guard ---
+    def held_cam_ids(self) -> set:
+        """
+        Return cam_ids this plugin requires to stay open.
+        Override in cross-camera plugins to protect source cameras from
+        being auto-closed while they are still needed (e.g. MultiView).
+        """
+        return set()
 ```
 
 ### 7.4 Pipeline Mode Declaration
@@ -932,6 +961,20 @@ frames = [
     for i in range(n)
 ]
 ```
+
+**`held_cam_ids()` — source-camera dependency declaration:**  
+Override this method to list the cameras your plugin reads from.  Protection is conditional on the consumer camera being busy — see the table in §3.5.
+
+```python
+def held_cam_ids(self) -> set:
+    with self._lock:
+        return {c for c in self._source_cams if c}
+```
+
+| Consumer cam busy? | `held_cam_ids()` honoured? | Source cam auto-closed? |
+|--------------------|---------------------------|------------------------|
+| Yes (e.g. MotionDetect running) | Yes | No — stays open |
+| No (only MultiView, idle) | No | Yes — closes normally |
 
 ### 7.5 Background Work Pattern
 
@@ -1034,18 +1077,21 @@ Only add HTTP routes when SocketIO actions are insufficient. Prefer the `plugin_
 
 ## Appendix: Built-in Plugin Reference
 
-| Plugin | PLUGIN_NAME | Type | Mode | Key Actions | Key Params |
-|--------|------------|------|------|-------------|-----------|
-| `BasicPhoto` | `BasicPhoto` | local | pipeline | `take_photo` | `photo_fmt` |
-| `BasicRecord` | `BasicRecord` | local | pipeline | `toggle_record` | `rec_fmt` |
-| `BasicBufRecord` | `BasicBufRecord` | local | pipeline | `toggle_buf_record` | `buf_fmt` |
-| `BasicParams` | `BasicParams` | local | pipeline | — | `exposure`, `gain`, `fps`, `exposure_auto`, `gain_auto`, `exp_auto_upper` |
-| `OverlayText` | `OverlayText` | local | display | — | `overlay_text` |
-| `MultiView` | `MultiView` | source | pipeline | — | `multiview_layout`, `multiview_cam_1..4`, `multiview_src_1..4`, `multiview_res` |
-| `Anaglyph` | `Anaglyph` | source | pipeline | — | `anaglyph_left_cam`, `anaglyph_right_cam`, `anaglyph_left_source`, `anaglyph_right_source`, `anaglyph_color_mode`, `anaglyph_left_is_red`, `anaglyph_parallax` |
+| Plugin | PLUGIN_NAME | Version | Type | Mode | Key Actions | Key Params |
+|--------|------------|---------|------|------|-------------|-----------|
+| `BasicPhoto` | `BasicPhoto` | — | local | pipeline | `take_photo` | `photo_fmt` |
+| `BasicRecord` | `BasicRecord` | — | local | pipeline | `toggle_record` | `rec_fmt` |
+| `BasicBufRecord` | `BasicBufRecord` | — | local | pipeline | `toggle_buf_record` | `buf_fmt` |
+| `BasicParams` | `BasicParams` | — | local | pipeline | — | `exposure`, `gain`, `fps`, `exposure_auto`, `gain_auto`, `exp_auto_upper` |
+| `OverlayText` | `OverlayText` | — | local | display | — | `overlay_text` |
+| `MultiView` | `MultiView` | 1.1.1 | source | pipeline | — | `multiview_layout`, `multiview_cam_1..4`, `multiview_src_1..4`, `multiview_res` |
+| `Anaglyph` | `Anaglyph` | — | source | pipeline | — | `anaglyph_left_cam`, `anaglyph_right_cam`, `anaglyph_left_source`, `anaglyph_right_source`, `anaglyph_color_mode`, `anaglyph_left_is_red`, `anaglyph_parallax` |
+| `MotionDetect` | `MotionDetect` | 1.0.3 | local | pipeline | `motdet_save_zones` | `motdet_enabled`, `motdet_var_threshold`, `motdet_min_pixel_count`, `motdet_cooldown_sec` |
 
-**Source plugins** (`MultiView`, `Anaglyph`) are intended for **VirtualDriver** cameras.  They synthesize a composite frame from other camera inputs; the virtual camera's dummy frame is discarded.  `BasicRecord` automatically reallocates its ping-pong buffer to match the composite frame dimensions, so recording source plugin output requires no extra configuration.
+**Source plugins** (`MultiView`, `Anaglyph`) are intended for **VirtualDriver** cameras.  They synthesize a composite frame from other camera inputs; the virtual camera's dummy frame is discarded.  `BasicRecord` automatically reallocates its ping-pong buffer to match the composite frame dimensions, so recording source plugin output requires no extra configuration.  Both source plugins implement `held_cam_ids()` to declare their source camera dependencies.
+
+**MotionDetect** runs a background detection thread (MOG2, 10 Hz) on a downscaled copy of the pipeline frame.  When motion is detected in any configured zone the plugin saves a full-resolution JPEG to `captures/<YYYYMMDD>/motdet_<cam_safe>_<timestamp_us>.jpg`.  Each camera instance has independent zones (stored in `captures/motdet_zones/<cam_safe>_zones.json`), independent cooldown timers, and independent detection threads — they never interfere with each other even when triggered simultaneously.
 
 ---
 
-*This document reflects version 6.12.0 of u3v-webui.*
+*This document reflects version 6.13.2 of u3v-webui.*
