@@ -1,4 +1,4 @@
-"""plugins/motiondetect/motion.py — MotionDetect plugin (1.0.0)
+"""plugins/motiondetect/motion.py — MotionDetect plugin (1.0.2)
 
 Local plugin: one instance per camera.
 Motion detection uses MOG2 on a downscaled frame (DETECT_WIDTH px wide).
@@ -41,7 +41,8 @@ class MotionDetect(PluginBase):
         self._lock        = threading.Lock()
 
         self._mog2: Optional[cv2.BackgroundSubtractor] = None
-        self._running = False
+        self._running   = False
+        self._stop_evt  = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_trigger = 0.0
 
@@ -56,7 +57,7 @@ class MotionDetect(PluginBase):
 
     @property
     def version(self) -> str:
-        return "1.0.0"
+        return "1.0.2"
 
     @property
     def description(self) -> str:
@@ -151,16 +152,17 @@ class MotionDetect(PluginBase):
     # ── HTTP snapshot route ───────────────────────────────────────────────────
 
     def register_routes(self, app, sio, ctx):
-        from flask import Response, abort, session
+        from flask import Response, abort, request, session
 
         state = ctx["state"]
 
-        @app.route("/plugin/motiondetect/snapshot/<cam_id>",
+        @app.route("/plugin/motiondetect/snapshot",
                    endpoint="motdet_snapshot")
-        def _motdet_snapshot(cam_id):
+        def _motdet_snapshot():
             if not session.get("logged_in"):
                 abort(401)
-            frame = state.get_latest_frame(cam_id)
+            cam_id = request.args.get("cam_id", "")
+            frame = state.get_display_frame(cam_id)
             if frame is None:
                 abort(404)
             _, buf = cv2.imencode(
@@ -173,6 +175,11 @@ class MotionDetect(PluginBase):
     def _start_thread(self):
         if self._running:
             return
+        # Wait for any lingering thread from a previous stop to exit
+        prev = self._thread
+        if prev is not None and prev.is_alive():
+            prev.join(timeout=0.3)
+        self._stop_evt.clear()
         with self._lock:
             self._mog2 = cv2.createBackgroundSubtractorMOG2(
                 history=500,
@@ -188,14 +195,19 @@ class MotionDetect(PluginBase):
 
     def _stop_thread(self):
         self._running = False
+        self._stop_evt.set()
+        t = self._thread
+        self._thread = None
+        if t is not None and t.is_alive():
+            t.join(timeout=0.3)
         log(f"[MotionDetect] Detection stopped [{self._cam_id}]")
 
     def _detect_loop(self):
         last_sample = 0.0
-        while self._running:
+        while self._running and not self._stop_evt.is_set():
             now = time.monotonic()
             if now - last_sample < 0.1:
-                time.sleep(0.01)
+                self._stop_evt.wait(0.01)
                 continue
             last_sample = now
 

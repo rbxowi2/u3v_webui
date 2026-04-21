@@ -1,4 +1,4 @@
-// motiondetect/ui.js — MotionDetect plugin frontend (1.1.0)
+// motiondetect/ui.js — MotionDetect plugin frontend (1.1.1)
 // Multi-camera safe: all DOM queries scoped to .plugin-ui-block.
 // Modal is created once and reused across all cameras.
 
@@ -425,7 +425,7 @@
     _selected   = -1;
     _snapActive = false;
 
-    _img.src = `/plugin/motiondetect/snapshot/${encodeURIComponent(cam_id)}?t=${Date.now()}`;
+    _img.src = `/plugin/motiondetect/snapshot?cam_id=${encodeURIComponent(cam_id)}&t=${Date.now()}`;
     _modal.style.display = 'flex';
     motdetSetTool('detect');
     _startFlash();
