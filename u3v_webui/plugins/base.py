@@ -1,4 +1,4 @@
-"""plugins/base.py — Abstract PluginBase interface (6.0.0)."""
+"""plugins/base.py — Abstract PluginBase interface (6.0.1)."""
 
 import inspect
 import os
@@ -131,6 +131,16 @@ class PluginBase(ABC):
         Global plugins: cam_id indicates which camera is being queried.
         """
         return False
+
+    def held_cam_ids(self) -> set:
+        """
+        Return cam_ids this plugin requires to stay open.
+
+        Used by try_auto_close_all() to protect cameras from being auto-closed
+        while a plugin on another camera depends on their frames.
+        Override in cross-camera plugins (e.g. MultiView) to declare dependencies.
+        """
+        return set()
 
     # ── Route registration ─────────────────────────────────────────────────────
 
