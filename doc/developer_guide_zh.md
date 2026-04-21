@@ -591,12 +591,10 @@ manager._pipeline[cam_id] = [
 
 | 方法 | 回傳內容 |
 |------|---------|
-| `state.get_latest_frame(cam_id)` | 最終 pipeline 幀（錄影／拍照用） |
-| `state.get_display_frame(cam_id)` | 顯示幀（含 display 模式插件效果） |
+| `state.get_latest_frame(cam_id)` | 最終 pipeline 幀 |
+| `state.get_display_frame(cam_id)` | 最終 display 幀 |
 
-所有插件均為單一相機所有，不再有「全域」類型之分。跨相機功能透過 state 注入實現。
-
-**來源插件模式（虛擬相機）：** 加入至 VirtualDriver 相機的插件可完全忽略傳入的 dummy frame，改從任意真實相機讀取畫面並合成新幀，回傳後取代虛擬相機的 pipeline 輸出。後續插件（錄影、文字疊加等）會正常接收該合成幀。需將 `PLUGIN_MODE = "pipeline"` 以確保結果傳給下游。
+所有插件均為單一相機所有，跨相機功能透過 state 注入實現。
 
 ### 6.4 執行流程範例
 
