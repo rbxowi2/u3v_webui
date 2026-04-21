@@ -1,6 +1,7 @@
 # u3v-webui 開發者指南
 
-**版本：** 6.12.0  
+**版本：** 6.13.3  
+**專案：** 工業相機區域網路 WebUI — 多相機、可擴充架構
 
 ---
 
@@ -16,7 +17,15 @@
 
 ---
 
-## 安裝
+## 1. 安裝
+
+### 系統需求
+
+| 元件 | 最低要求 |
+|------|---------|
+| Python | 3.9+ |
+| 作業系統 | Linux（建議）、macOS、Windows |
+| OpenSSL | 任意版本（用於產生自簽 TLS 憑證） |
 
 ### 1. 系統套件
 
@@ -30,7 +39,7 @@ sudo apt-get install -y \
 
 ### 2. 虛擬環境
 
-建立時加上 `--system-site-packages`，確保能存取上方安裝的系統套件：
+使用 `--system-site-packages` 建立虛擬環境，讓上述系統套件可在環境中存取：
 
 ```bash
 python3 -m venv --system-site-packages venv
@@ -38,10 +47,10 @@ source venv/bin/activate
 pip install flask flask-socketio
 ```
 
-### 3. U3V相機(可選)
+### 3. 選用 — USB3 Vision 相機
 
-相機存取權限（只需做一次）
-本程式以**海康 USB3 Vision 相機**為開發與測試基準
+相機存取權限設定（一次性）。  
+本專案以 **Hikvision USB3 Vision 相機** 開發與測試。
 
 ```bash
 sudo bash -c 'cat > /etc/udev/rules.d/99-hikvision.rules << EOF
@@ -53,7 +62,7 @@ sudo udevadm trigger
 sudo usermod -aG plugdev $USER
 ```
 
-> 重新登入後群組設定才會生效。
+> 群組成員資格在重新登入後生效。
 
 ### 啟動伺服器
 
@@ -90,95 +99,16 @@ CAM_JOIN_TIMEOUT   = 2            # 驅動執行緒關閉逾時（秒）
 
 ## 2. 網路安全機制
 
-### 2.1 傳輸加密（HTTPS / TLS）
-
-所有流量均經 TLS 加密。伺服器啟動時，`app.main()` 呼叫 `_ensure_ssl_cert(local_ip)`，自動產生 RSA-2048 自簽憑證，並在 SAN 欄位帶入伺服器區網 IP：
-
-```
-openssl req -x509 -newkey rsa:2048
-            -keyout temp/key.pem
-            -out    temp/cert.pem
-            -days 3650
-            -subj "/CN=<local_ip>"
-            -addext "subjectAltName=IP:<local_ip>"
-```
-
-若系統找不到 `openssl`，伺服器退回純 HTTP 模式（會記錄警告訊息）。
-
-### 2.2 Session 身份驗證
-
-登入流程：
-
-```
-瀏覽器                              伺服器
-  |                                   |
-  |  GET /login                       |
-  |<----------------------------------|  設定 session["csrf_token"]（32 位元組隨機值）
-  |                                   |
-  |  POST /login {user, pw, csrf}     |
-  |---------------------------------->|
-  |                                   | 1. hmac.compare_digest(表單 csrf, session csrf)
-  |                                   | 2. 驗證帳號與密碼
-  |                                   | 3. 人為延遲 1 秒（防暴力破解）
-  |                                   | 4. SecurityManager.record_success/fail(ip)
-  |                                   | 5. 通過 → create_token() → 設定 session["token"]
-  |<----------------------------------|  導向 / 或 /viewer
-```
-
-CSRF token 比對使用 `hmac.compare_digest`，具抗時序攻擊特性。
-
-### 2.3 Token 閘控 WebSocket
-
-登入後，瀏覽器透過 session cookie 取得 token。每次 SocketIO 連線必須附帶此 token：
-
-```
-wss://host:port/socket.io/?token=<hex_token>
-```
-
-`on_connect` 處理器驗證 token 是否存在於 `AppState._token_is_admin`，無效 token 立即斷線。token 內嵌 `is_admin` 旗標，控制該用戶端可觸發的 SocketIO 事件範圍。
-
-### 2.4 IP 速率限制與黑名單
-
-實作於 `u3v_webui/security.py` → `SecurityManager`：
-
-```
-每次登入失敗：
-  _fail_counts[ip] += 1
-  若 _fail_counts[ip] >= FAIL_MAX_ATTEMPTS：
-      封鎖該 IP → 寫入 security_blacklist.json
-      加入管理員通知佇列
-```
-
-- 失敗次數為**累計值**（即使之後登入成功也不重置）
-- 被封鎖的 IP 所有後續請求均回傳 HTTP 403
-- 管理員可透過 UI 安全面板清除黑名單
-
-**持久化狀態檔：**
-
-| 檔案 | 內容 |
+| 機制 | 說明 |
 |------|------|
-| `security_blacklist.json` | 被封鎖的 IP、失敗次數、管理員通知 |
-| `security_log.json` | 稽核日誌：登入成功／失敗事件（含時間戳記、IP） |
+| TLS（HTTPS） | 首次啟動自動產生 RSA-2048 自簽憑證；找不到 `openssl` 時退回 HTTP |
+| Session 身份驗證 | 含 CSRF 防護的登入表單；每個 IP 1 秒延遲與累計失敗計數 |
+| Token 閘控 WebSocket | 每次 SocketIO 連線必須附帶 session token；token 內嵌 `is_admin` 旗標 |
+| IP 黑名單 | 累計失敗次數達 `FAIL_MAX_ATTEMPTS` 後封鎖該 IP；重啟後持久（`security_blacklist.json`） |
+| 管理員權限 | 所有相機控制與插件管理事件均需管理員 token；觀看者只能接收幀串流 |
+| 伺服器標頭隱藏 | 所有 HTTP 回應移除 Flask/Werkzeug 版本資訊 |
 
-### 2.5 管理員權限模型
-
-所有相機控制類 SocketIO 事件（open、close、scan、add_plugin 等）在執行前均呼叫 `_is_admin_sid(sid)` 驗證。觀看者連線可接收幀串流與狀態更新，但無法發出控制指令。
-
-```
-Admin session  → 完整相機控制、插件管理、安全面板
-Viewer session → 串流觀看、個人串流暫停／繼續
-```
-
-### 2.6 伺服器標頭隱藏
-
-```python
-@app.after_request
-def strip_server_header(response):
-    response.headers.pop("Server", None)
-    return response
-```
-
-移除所有 HTTP 回應中的 Flask/Werkzeug 伺服器版本資訊。
+設定：`FAIL_MAX_ATTEMPTS` 位於 `u3v_webui/config.py`；完整實作見 `u3v_webui/security.py`（`SecurityManager`）。
 
 ---
 
@@ -269,10 +199,13 @@ state._stream_paused[(cam_id, sid)]    # 本觀看者的串流暫停旗標
 
 ### 3.5 自動開啟／關閉機制
 
-- 最後一位觀看者離線且沒有任何插件回報 `is_busy()` 時，相機**自動關閉**。
-- 管理員曾手動開啟過的相機（`_manual_closed=False`）會記錄於 `_auto_reopen_cams`。
-- 下一位觀看者連線時，這些相機會**自動重開**。
-- 伺服器啟動時所有相機預設為 `_manual_closed=True`，**不會自動開啟**。
+| 事件 | 動作 |
+|------|------|
+| 管理員開啟相機 | 加入 `_auto_reopen_cams` |
+| 管理員手動關閉相機 | 從 `_auto_reopen_cams` 移除 |
+| 最後一位觀看者離線（無忙碌插件） | 相機自動關閉；`_auto_reopen_cams` 記錄**保留** |
+| 下一位觀看者連線 | `_auto_reopen_cams` 中未開啟的相機**自動重開** |
+| 伺服器啟動 | `_auto_reopen_cams` 為空，**不自動開啟任何相機** |
 
 **來源相機保護（`held_cam_ids`）：**  
 跨相機合成插件（如 `MultiView`）覆寫 `held_cam_ids() -> set`，宣告它所依賴的相機 ID。`try_auto_close_all()` 採用兩階段演算法：
@@ -402,7 +335,7 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision、GigE | Aravis（GObject） |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class、V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI（Raspberry Pi，影片模式） | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | picamera2/libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | libcamera |
 | `VirtualDriver` | `virtual_driver.py` | 合成幀（測試用） | NumPy |
 
 > **靜態拍照模式說明：** `RPiImgDriver` 完全以 `time.sleep()` 控制幀率，不使用感測器定時暫存器。其 `query_native_modes()` 回傳的每筆記錄只含 `{"width": w, "height": h}`，**不含** `"fps"` 欄位；UI 在此類模式下會隱藏 fps 欄。
@@ -620,23 +553,25 @@ AppState._on_frame(frame, ts_ns, cam_id)
     ▼
 PluginManager.process_frame_for_camera(frame, ts_ns, cam_id)
     │
-    ├─ [pipeline 模式插件] → pipeline_frame  （儲存至磁碟、傳給後續插件）
+    ├─ [pipeline 模式插件] → pipeline_frame
     │
-    └─ [display 模式插件]  → display_frame   （僅用於串流，不寫入磁碟）
+    └─ [display 模式插件]  → display_frame
     │
     ▼
-AppState._pipeline_frames[cam_id] = pipeline_frame   ← 拍照／錄影使用
-AppState._display_frames[cam_id]  = display_frame    ← 串流使用
+AppState._pipeline_frames[cam_id] = pipeline_frame
+AppState._display_frames[cam_id]  = display_frame
 ```
 
 ### 6.2 Pipeline 模式 vs Display 模式
 
-| 模式 | 幀來源 | 結果是否儲存 | 使用方 |
-|------|--------|------------|--------|
-| `"pipeline"` | 前一個插件的輸出 | 是（`_pipeline_frames`） | 錄影、拍照、後續插件 |
-| `"display"` | 當前 pipeline_frame 的副本 | 否 | 僅限串流給觀看者 |
+兩種模式都是**管線分段標籤**，決定插件所屬的處理階段，與插件的功能種類無關。任何插件（錄影、拍照、偵測、疊加效果等）均可設定為任一模式。
 
-宣告為 `"display"` 模式的插件可疊加視覺標註或預覽效果，不影響儲存的檔案內容。
+| 模式 | 分段 | 執行時機 | 輸出幀 |
+|------|------|---------|-------|
+| `"pipeline"` | 第一階段，優先執行 | 在所有 display 插件之前 | `_pipeline_frames[cam_id]` |
+| `"display"` | 第二階段，後續執行 | 在所有 pipeline 插件完成後 | `_display_frames[cam_id]` |
+
+每個階段內部依列表順序嚴格循序執行。pipeline 與 display 插件可交錯排列於列表中，各插件依模式自動分配至正確的執行階段，不受列表位置影響。display 插件永遠以最終 pipeline 幀為輸入起點。
 
 ### 6.3 每台相機的插件 Pipeline
 
@@ -1074,4 +1009,4 @@ def register_routes(self, app, sio, ctx):
 
 ---
 
-*本文件對應 u3v-webui 版本 6.13.2。*
+*本文件對應 u3v-webui 版本 6.13.3。*

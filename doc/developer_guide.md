@@ -1,6 +1,7 @@
 # u3v-webui Developer Guide
 
-**Version:** 6.12.0 / Plugin suite 2025-04  
+**Version:** 6.13.3 / Plugin suite 2025-04  
+**Project:** Industrial Camera LAN WebUI — multi-camera, extensible
 
 ---
 
@@ -46,10 +47,10 @@ source venv/bin/activate
 pip install flask flask-socketio
 ```
 
-### 3. Option- USB3 Vision camera  
+### 3. Option — USB3 Vision Camera
 
-Camera Access Permissions (one-time setup) 
-This project is developed and tested with **Hikvision USB3 Vision cameras**
+Camera access permissions (one-time setup).  
+This project is developed and tested with **Hikvision USB3 Vision cameras**.
 
 ```bash
 sudo bash -c 'cat > /etc/udev/rules.d/99-hikvision.rules << EOF
@@ -98,95 +99,16 @@ CAM_JOIN_TIMEOUT   = 2            # Driver thread shutdown timeout (s)
 
 ## 2. Security Architecture
 
-### 2.1 Transport Security (HTTPS / TLS)
+| Mechanism | Description |
+|-----------|-------------|
+| TLS (HTTPS) | Self-signed RSA-2048 certificate auto-generated on first run; falls back to HTTP if `openssl` is unavailable |
+| Session authentication | CSRF-protected login form; 1 s artificial delay and cumulative fail counter per IP |
+| Token-gated WebSocket | Every SocketIO connection must present the session token; `is_admin` flag embedded in token |
+| IP blacklist | IP blocked after `FAIL_MAX_ATTEMPTS` cumulative failures; persisted to `security_blacklist.json` |
+| Admin privilege | All camera-control and plugin-management events require admin token; viewers receive frames only |
+| Server header stripping | Flask/Werkzeug server banner removed from all HTTP responses |
 
-All traffic is encrypted via TLS. On startup, `app.main()` calls `_ensure_ssl_cert(local_ip)`, which generates a self-signed RSA-2048 certificate with a Subject Alternative Name (SAN) matching the server's LAN IP address:
-
-```
-openssl req -x509 -newkey rsa:2048
-            -keyout temp/key.pem
-            -out    temp/cert.pem
-            -days 3650
-            -subj "/CN=<local_ip>"
-            -addext "subjectAltName=IP:<local_ip>"
-```
-
-If `openssl` is unavailable, the server falls back to plain HTTP (logged as a warning).
-
-### 2.2 Session-Based Authentication
-
-Login flow:
-
-```
-Browser                          Server
-  |                                |
-  |  GET /login                    |
-  |<-------------------------------|  Set session["csrf_token"] (32-byte random)
-  |                                |
-  |  POST /login {user, pw, csrf}  |
-  |------------------------------>|
-  |                                | 1. hmac.compare_digest(form_csrf, session_csrf)
-  |                                | 2. Validate username + password
-  |                                | 3. 1s artificial delay (brute-force resistance)
-  |                                | 4. SecurityManager.record_success/fail(ip)
-  |                                | 5. If OK → create_token() → set session["token"]
-  |<------------------------------|  Redirect to / or /viewer
-```
-
-CSRF tokens use `hmac.compare_digest` for timing-safe comparison.
-
-### 2.3 Token-Gated WebSocket
-
-After login, the browser receives a token stored in the session cookie. Every SocketIO connection must present this token:
-
-```
-wss://host:port/socket.io/?token=<hex_token>
-```
-
-The `on_connect` handler validates the token against `AppState._token_is_admin`. Invalid tokens are rejected immediately. The `is_admin` flag embedded in the token controls which SocketIO events a client may emit.
-
-### 2.4 IP Rate Limiting and Blacklist
-
-Implemented in `u3v_webui/security.py` → `SecurityManager`:
-
-```
-Each failed login:
-  _fail_counts[ip] += 1
-  if _fail_counts[ip] >= FAIL_MAX_ATTEMPTS:
-      blacklist ip → save to security_blacklist.json
-      queue admin notification
-```
-
-- Counts are **cumulative** (survive correct logins)
-- Blacklisted IPs receive HTTP 403 on every subsequent request
-- Admins can clear the blacklist via the security panel in the UI
-
-**Persistent state files:**
-
-| File | Contents |
-|------|----------|
-| `security_blacklist.json` | Blacklisted IPs, fail counts, admin notifications |
-| `security_log.json` | Audit log: login success/fail events with timestamp and IP |
-
-### 2.5 Admin Privilege Model
-
-All camera-control SocketIO events (open, close, scan, add_plugin, etc.) call `_is_admin_sid(sid)` before executing. Viewer connections can receive frames and state updates but cannot issue commands.
-
-```
-Admin session  → full camera control, plugin management, security panel
-Viewer session → stream view, pause/resume own stream only
-```
-
-### 2.6 Server Header Stripping
-
-```python
-@app.after_request
-def strip_server_header(response):
-    response.headers.pop("Server", None)
-    return response
-```
-
-This removes the Flask/Werkzeug server banner from all HTTP responses.
+Configuration: `FAIL_MAX_ATTEMPTS` in `u3v_webui/config.py`; full implementation in `u3v_webui/security.py` (`SecurityManager`).
 
 ---
 
@@ -412,7 +334,7 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision, GigE | Aravis (GObject) |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class, V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI (Raspberry Pi, video mode) | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | picamera2/libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | libcamera |
 | `VirtualDriver` | `virtual_driver.py` | Synthetic (test) | NumPy |
 
 > **Still-mode note:** `RPiImgDriver` controls FPS entirely via `time.sleep()` rather than sensor timing registers.  Its `query_native_modes()` returns `{"width": w, "height": h}` entries **without** an `"fps"` key; the UI omits the fps column for these modes.
@@ -633,25 +555,25 @@ AppState._on_frame(frame, ts_ns, cam_id)
     ▼
 PluginManager.process_frame_for_camera(frame, ts_ns, cam_id)
     │
-    ├─ Phase 1: pipeline plugins (in list order) → pipeline_frame  (saved to disk)
+    ├─ Phase 1: pipeline plugins (in list order) → pipeline_frame
     │
-    └─ Phase 2: display plugins (in list order)  → display_frame   (streaming only)
+    └─ Phase 2: display plugins (in list order)  → display_frame
     │
     ▼
-AppState._pipeline_frames[cam_id] = pipeline_frame   ← photo/record use this
-AppState._display_frames[cam_id]  = display_frame    ← streaming uses this
+AppState._pipeline_frames[cam_id] = pipeline_frame
+AppState._display_frames[cam_id]  = display_frame
 ```
 
 ### 6.2 Pipeline Mode vs Display Mode
 
-| Mode | Frame source | Result stored | Used by |
-|------|-------------|---------------|---------|
-| `"pipeline"` | Output of preceding pipeline plugins | Yes (`_pipeline_frames`) | Recording, photo |
-| `"display"` | Copy of final pipeline_frame | No | Streaming to viewers only |
+Both modes are **pipeline segment markers** — they determine which processing phase a plugin belongs to, not what the plugin does.  Any plugin type (recording, photo, detection, overlay) can be assigned either mode.
 
-A plugin declared with `"display"` mode can add visual overlays, annotations, or previews without polluting saved files.
+| Mode | Segment | Runs | Output frame |
+|------|---------|------|--------------|
+| `"pipeline"` | Phase 1 — runs first | Before any display plugin | `_pipeline_frames[cam_id]` |
+| `"display"` | Phase 2 — runs after | After all pipeline plugins complete | `_display_frames[cam_id]` |
 
-**Two-phase execution** means display plugins always receive the fully-processed pipeline_frame as their base, regardless of where they appear in the pipeline list.  Interleaving pipeline and display plugins in the list is safe — the list order only affects execution order within each phase.
+Execution within each phase is strictly sequential in list order.  Pipeline and display plugins may be interleaved in the list — each plugin is automatically routed to the correct phase regardless of its position.  Display plugins always receive the fully-processed pipeline frame as their starting point.
 
 ### 6.3 Per-Camera Plugin Pipeline
 
@@ -1094,4 +1016,4 @@ Only add HTTP routes when SocketIO actions are insufficient. Prefer the `plugin_
 
 ---
 
-*This document reflects version 6.13.2 of u3v-webui.*
+*This document reflects version 6.13.3 of u3v-webui.*
