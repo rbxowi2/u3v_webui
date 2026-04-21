@@ -412,7 +412,7 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision, GigE | Aravis (GObject) |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class, V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI (Raspberry Pi, video mode) | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | picamera2/libcamera |
 | `VirtualDriver` | `virtual_driver.py` | Synthetic (test) | NumPy |
 
 > **Still-mode note:** `RPiImgDriver` controls FPS entirely via `time.sleep()` rather than sensor timing registers.  Its `query_native_modes()` returns `{"width": w, "height": h}` entries **without** an `"fps"` key; the UI omits the fps column for these modes.
