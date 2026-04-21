@@ -1,7 +1,15 @@
 # u3v-webui Developer Guide
 
 **Version:** 6.13.3 / Plugin suite 2025-04  
-**Project:** Industrial Camera LAN WebUI — multi-camera, extensible
+**Project:** Multi-camera web streaming platform with extensible plugin pipeline
+
+Multi-camera web streaming platform — access and control cameras via browser, with a plugin pipeline for composing any combination of frame processing.
+
+**Highlights:**
+- Multiple cameras streamed simultaneously; each viewer tracks cameras independently
+- Plugin pipeline — pipeline / display segment markers, freely combine processing (recording, photo, detection, compositing, etc.)
+- Drivers and plugins are independently extensible — drop into the corresponding directory, auto-loaded on startup
+- Supports USB3 Vision (Aravis), UVC (V4L2), Raspberry Pi CSI, virtual cameras
 
 ---
 
@@ -334,7 +342,7 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision, GigE | Aravis (GObject) |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class, V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI (Raspberry Pi, video mode) | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | picamer2/libcamera |
 | `VirtualDriver` | `virtual_driver.py` | Synthetic (test) | NumPy |
 
 > **Still-mode note:** `RPiImgDriver` controls FPS entirely via `time.sleep()` rather than sensor timing registers.  Its `query_native_modes()` returns `{"width": w, "height": h}` entries **without** an `"fps"` key; the UI omits the fps column for these modes.
@@ -599,7 +607,7 @@ Within each phase, execution is strictly sequential in list order.
 
 All plugins are per-camera; there is no separate "global" type.  Cross-camera functionality is achieved through state injection.
 
-**Source plugin pattern (virtual cameras):** A plugin added to a VirtualDriver camera can ignore the incoming dummy frame and synthesize a new frame from any combination of real camera inputs.  Returning that synthesized frame from `on_frame` replaces the virtual camera's pipeline frame entirely — downstream plugins (recording, overlays) process the result normally.  Set `PLUGIN_MODE = "pipeline"` so the output propagates through the rest of the pipeline.
+**Cross-camera source pattern:** A plugin on any camera can read frames from other cameras via `self._state` and return a synthesized frame.  When `on_frame` returns a non-`None` value, it **replaces the current pipeline frame** — any processing done by preceding pipeline plugins on this camera is discarded.  Downstream plugins receive the synthesized frame as their input.  Set `PLUGIN_MODE = "pipeline"` so downstream pipeline plugins receive the result.  VirtualDriver cameras are commonly used as the host because their dummy frame carries no useful data, but the pattern works on any camera type.
 
 **Multi-instance plugins** set `PLUGIN_ALLOW_MULTIPLE = True` in `plugin.py`.  They may be added to the same camera multiple times; each instance receives a unique `instance_key` (e.g. `OverlayText`, `OverlayText_2`).  The instance key is injected into `_instance_key` on the plugin object and should be used to namespace state/param keys.
 
@@ -620,13 +628,13 @@ if result is not None:
 
 result = basic_record.on_frame(pipeline_frame, hw_ts_ns, "cam_1")
 if result is not None:
-    pipeline_frame = result          # saved to disk
+    pipeline_frame = result
 
 # Phase 2 — display plugins in list order
 display_frame = pipeline_frame.copy()   # branch off final pipeline result
 result = overlay_text.on_frame(display_frame, hw_ts_ns, "cam_1")
 if result is not None:
-    display_frame = result           # only affects viewers
+    display_frame = result
 
 return (pipeline_frame, display_frame)
 ```
@@ -833,7 +841,7 @@ The UI script reads `block.dataset.instance` to determine the instance key and b
 
 ### 7.4b Cross-Camera Source Plugin
 
-A source plugin is added to a **VirtualDriver** camera and ignores the incoming frame.  It reads from other cameras via `self._state` and returns a synthesized frame that becomes the virtual camera's pipeline output.
+A source plugin reads frames from other cameras via `self._state` and returns a synthesized frame that replaces the host camera's current pipeline frame.  Any processing done by preceding pipeline plugins on the same camera is discarded when the source plugin returns a new frame.  VirtualDriver cameras are commonly used as the host since their dummy frame carries no meaningful data, but the pattern works on any camera type.
 
 ```python
 class MyStereoPlugin(PluginBase):
@@ -872,7 +880,7 @@ PLUGIN_NAME  = "MyStereo"
 PLUGIN_MODE  = "pipeline"   # result propagates to downstream plugins
 ```
 
-Usage: open a VirtualDriver camera → add MyStereo → select cam_a and cam_b.  The virtual camera's stream, recording, and any downstream plugins all receive the composed output.
+Usage: open a camera (typically VirtualDriver) → add MyStereo → select cam_a and cam_b.  The camera's stream, recording, and any downstream plugins all receive the composed output.
 
 **Self-reference guard:** Never read the virtual camera's own `cam_id` as a source slot — it creates a circular dependency and stalls the pipeline.  Guard every slot before fetching:
 
@@ -1001,16 +1009,16 @@ Only add HTTP routes when SocketIO actions are insufficient. Prefer the `plugin_
 
 | Plugin | PLUGIN_NAME | Version | Type | Mode | Key Actions | Key Params |
 |--------|------------|---------|------|------|-------------|-----------|
-| `BasicPhoto` | `BasicPhoto` | — | local | pipeline | `take_photo` | `photo_fmt` |
-| `BasicRecord` | `BasicRecord` | — | local | pipeline | `toggle_record` | `rec_fmt` |
-| `BasicBufRecord` | `BasicBufRecord` | — | local | pipeline | `toggle_buf_record` | `buf_fmt` |
-| `BasicParams` | `BasicParams` | — | local | pipeline | — | `exposure`, `gain`, `fps`, `exposure_auto`, `gain_auto`, `exp_auto_upper` |
-| `OverlayText` | `OverlayText` | — | local | display | — | `overlay_text` |
+| `BasicPhoto` | `BasicPhoto` | 1.1.0 | local | pipeline | `take_photo` | `photo_fmt` |
+| `BasicRecord` | `BasicRecord` | 1.0.0 | local | pipeline | `toggle_record` | `rec_fmt` |
+| `BasicBufRecord` | `BasicBufRecord` | 1.0.0 | local | pipeline | `toggle_buf_record` | `buf_fmt` |
+| `BasicParams` | `BasicParams` | 2.0.0 | local | pipeline | — | `exposure`, `gain`, `fps`, `exposure_auto`, `gain_auto`, `exp_auto_upper` |
+| `OverlayText` | `OverlayText` | 1.1.0 | local | display | — | `overlay_text` |
 | `MultiView` | `MultiView` | 1.1.1 | source | pipeline | — | `multiview_layout`, `multiview_cam_1..4`, `multiview_src_1..4`, `multiview_res` |
-| `Anaglyph` | `Anaglyph` | — | source | pipeline | — | `anaglyph_left_cam`, `anaglyph_right_cam`, `anaglyph_left_source`, `anaglyph_right_source`, `anaglyph_color_mode`, `anaglyph_left_is_red`, `anaglyph_parallax` |
+| `Anaglyph` | `Anaglyph` | 2.1.0 | source | pipeline | — | `anaglyph_left_cam`, `anaglyph_right_cam`, `anaglyph_left_source`, `anaglyph_right_source`, `anaglyph_color_mode`, `anaglyph_left_is_red`, `anaglyph_parallax` |
 | `MotionDetect` | `MotionDetect` | 1.0.3 | local | pipeline | `motdet_save_zones` | `motdet_enabled`, `motdet_var_threshold`, `motdet_min_pixel_count`, `motdet_cooldown_sec` |
 
-**Source plugins** (`MultiView`, `Anaglyph`) are intended for **VirtualDriver** cameras.  They synthesize a composite frame from other camera inputs; the virtual camera's dummy frame is discarded.  `BasicRecord` automatically reallocates its ping-pong buffer to match the composite frame dimensions, so recording source plugin output requires no extra configuration.  Both source plugins implement `held_cam_ids()` to declare their source camera dependencies.
+**Source plugins** (`MultiView`, `Anaglyph`) read frames from other cameras and return a synthesized composite that replaces the host camera's pipeline frame; any preceding pipeline processing on the host camera is discarded.  VirtualDriver cameras are typically used as the host.  `BasicRecord` automatically reallocates its ping-pong buffer to match the composite frame dimensions.  Both source plugins implement `held_cam_ids()` to declare their source camera dependencies.
 
 **MotionDetect** runs a background detection thread (MOG2, 10 Hz) on a downscaled copy of the pipeline frame.  When motion is detected in any configured zone the plugin saves a full-resolution JPEG to `captures/<YYYYMMDD>/motdet_<cam_safe>_<timestamp_us>.jpg`.  Each camera instance has independent zones (stored in `captures/motdet_zones/<cam_safe>_zones.json`), independent cooldown timers, and independent detection threads — they never interfere with each other even when triggered simultaneously.
 

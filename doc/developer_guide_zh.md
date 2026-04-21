@@ -1,7 +1,15 @@
 # u3v-webui 開發者指南
 
 **版本：** 6.13.3  
-**專案：** 工業相機區域網路 WebUI — 多相機、可擴充架構
+**專案：** 多相機網頁串流平台，具可擴充插件管線架構
+
+多相機網頁串流平台，透過瀏覽器存取和控制相機，插件管線架構可自由組合畫面處理流程。
+
+**主要特點：**
+- 多相機同時串流，多使用者獨立觀看
+- 插件管線 — pipeline / display 分段標籤，任意組合處理（錄影、拍照、偵測、合成等）
+- 驅動與插件皆可獨立擴充，放入對應目錄自動載入
+- 支援 USB3 Vision（Aravis）、UVC（V4L2）、Raspberry Pi CSI、虛擬相機
 
 ---
 
@@ -335,7 +343,7 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision、GigE | Aravis（GObject） |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class、V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI（Raspberry Pi，影片模式） | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | picamer2/libcamera |
 | `VirtualDriver` | `virtual_driver.py` | 合成幀（測試用） | NumPy |
 
 > **靜態拍照模式說明：** `RPiImgDriver` 完全以 `time.sleep()` 控制幀率，不使用感測器定時暫存器。其 `query_native_modes()` 回傳的每筆記錄只含 `{"width": w, "height": h}`，**不含** `"fps"` 欄位；UI 在此類模式下會隱藏 fps 欄。
@@ -585,16 +593,18 @@ manager._pipeline[cam_id] = [
 ]
 ```
 
-同一幀內的執行順序嚴格按列表順序。display 模式插件看到的是所有前序 pipeline 模式插件處理後的結果。
+同一幀內的執行順序嚴格按列表順序。display 模式插件以所有 pipeline 插件執行完成後的最終幀為輸入起點。
 
 **跨相機畫面存取：** 每個插件都是針對特定相機新增的。需要讀取其他相機畫面的插件可在實作中宣告 `self._state = None`，PluginManager 會注入 AppState 實例，讓插件存取任意相機的畫面：
 
 | 方法 | 回傳內容 |
 |------|---------|
-| `state.get_latest_frame(cam_id)` | 最終 pipeline 幀 |
-| `state.get_display_frame(cam_id)` | 最終 display 幀 |
+| `state.get_latest_frame(cam_id)` | 最終 pipeline 幀（錄影／拍照用） |
+| `state.get_display_frame(cam_id)` | 顯示幀（含 display 模式插件效果） |
 
-所有插件均為單一相機所有，跨相機功能透過 state 注入實現。
+所有插件均為單一相機所有，不再有「全域」類型之分。跨相機功能透過 state 注入實現。
+
+**跨相機來源模式：** 任何相機上的插件都可透過 `self._state` 讀取其他相機的畫面並回傳合成幀。`on_frame` 回傳非 `None` 的幀時，**會取代目前的 pipeline 幀**——此相機上前序 pipeline 插件對幀所做的所有處理將被丟棄。後續插件以合成幀為輸入繼續執行。設定 `PLUGIN_MODE = "pipeline"` 可確保後續 pipeline 插件接收到合成幀。VirtualDriver 相機常被用作宿主，因為其 dummy 幀本身沒有意義，但此模式可在任何相機類型上使用。
 
 ### 6.4 執行流程範例
 
@@ -611,13 +621,13 @@ if result is not None:
 # 步驟 2 — BasicRecord（pipeline 模式）
 result = basic_record.on_frame(pipeline_frame, hw_ts_ns, "cam_1")
 if result is not None:
-    pipeline_frame = result          # 此幀寫入磁碟
+    pipeline_frame = result
 
 # 步驟 3 — OverlayText（display 模式）
 display_frame = pipeline_frame.copy()   # 從 pipeline 分叉出副本
 result = overlay_text.on_frame(display_frame, hw_ts_ns, "cam_1")
 if result is not None:
-    display_frame = result           # 僅影響觀看者畫面
+    display_frame = result
 
 return (pipeline_frame, display_frame)
 ```
@@ -825,7 +835,7 @@ UI 腳本透過 `block.dataset.instance` 取得 instance key，並據此組合 p
 
 ### 7.4b 跨相機來源插件（虛擬相機）
 
-來源插件加入至 **VirtualDriver** 相機，完全忽略傳入的 dummy frame，改從其他真實相機讀取畫面並合成，回傳的幀取代虛擬相機的 pipeline 輸出。
+來源插件透過 `self._state` 讀取其他相機的畫面並回傳合成幀，**取代宿主相機目前的 pipeline 幀**；宿主相機上前序 pipeline 插件對幀所做的處理將被丟棄。VirtualDriver 相機常被用作宿主，因為其 dummy 幀本身沒有意義，但此插件可在任何相機類型上使用。
 
 ```python
 class MyStereoPlugin(PluginBase):
@@ -863,7 +873,7 @@ PLUGIN_NAME  = "MyStereo"
 PLUGIN_MODE  = "pipeline"   # 合成幀傳給下游插件
 ```
 
-使用方式：開啟 VirtualDriver 相機 → 新增 MyStereo → 選擇 cam_a、cam_b。虛擬相機的串流、錄影及後續插件均接收合成後的畫面。
+使用方式：開啟相機（通常為 VirtualDriver）→ 新增 MyStereo → 選擇 cam_a、cam_b。該相機的串流、錄影及後續插件均接收合成後的畫面。
 
 **自我參照防護：** 絕對不要將虛擬相機自身的 `cam_id` 設為來源槽位——這會產生循環依賴並導致 pipeline 停滯。每個槽位取幀前需加入防護：
 
@@ -992,16 +1002,16 @@ def register_routes(self, app, sio, ctx):
 
 | 插件 | PLUGIN_NAME | 版本 | 類型 | 模式 | 主要動作 | 主要參數 |
 |------|------------|------|------|------|---------|---------|
-| `BasicPhoto` | `BasicPhoto` | — | local | pipeline | `take_photo` | `photo_fmt` |
-| `BasicRecord` | `BasicRecord` | — | local | pipeline | `toggle_record` | `rec_fmt` |
-| `BasicBufRecord` | `BasicBufRecord` | — | local | pipeline | `toggle_buf_record` | `buf_fmt` |
-| `BasicParams` | `BasicParams` | — | local | pipeline | — | `exposure`、`gain`、`fps`、`exposure_auto`、`gain_auto`、`exp_auto_upper` |
-| `OverlayText` | `OverlayText` | — | local | display | — | `overlay_text` |
+| `BasicPhoto` | `BasicPhoto` | 1.1.0 | local | pipeline | `take_photo` | `photo_fmt` |
+| `BasicRecord` | `BasicRecord` | 1.0.0 | local | pipeline | `toggle_record` | `rec_fmt` |
+| `BasicBufRecord` | `BasicBufRecord` | 1.0.0 | local | pipeline | `toggle_buf_record` | `buf_fmt` |
+| `BasicParams` | `BasicParams` | 2.0.0 | local | pipeline | — | `exposure`、`gain`、`fps`、`exposure_auto`、`gain_auto`、`exp_auto_upper` |
+| `OverlayText` | `OverlayText` | 1.1.0 | local | display | — | `overlay_text` |
 | `MultiView` | `MultiView` | 1.1.1 | source | pipeline | — | `multiview_layout`、`multiview_cam_1..4`、`multiview_src_1..4`、`multiview_res` |
-| `Anaglyph` | `Anaglyph` | — | source | pipeline | — | `anaglyph_left_cam`、`anaglyph_right_cam`、`anaglyph_left_source`、`anaglyph_right_source`、`anaglyph_color_mode`、`anaglyph_left_is_red`、`anaglyph_parallax` |
+| `Anaglyph` | `Anaglyph` | 2.1.0 | source | pipeline | — | `anaglyph_left_cam`、`anaglyph_right_cam`、`anaglyph_left_source`、`anaglyph_right_source`、`anaglyph_color_mode`、`anaglyph_left_is_red`、`anaglyph_parallax` |
 | `MotionDetect` | `MotionDetect` | 1.0.3 | local | pipeline | `motdet_save_zones` | `motdet_enabled`、`motdet_var_threshold`、`motdet_min_pixel_count`、`motdet_cooldown_sec` |
 
-**來源插件**（`MultiView`、`Anaglyph`）專為 **VirtualDriver** 相機設計，從其他相機合成畫面後回傳，虛擬相機的 dummy 幀將被丟棄。`BasicRecord` 會自動重新分配 ping-pong 緩衝區以符合合成幀尺寸，錄製來源插件輸出無需額外設定。兩個來源插件均實作 `held_cam_ids()` 宣告來源相機依賴。
+**來源插件**（`MultiView`、`Anaglyph`）從其他相機讀取畫面並回傳合成幀，取代宿主相機的 pipeline 幀；宿主相機上前序 pipeline 插件的處理結果將被丟棄。通常以 VirtualDriver 相機作為宿主。`BasicRecord` 會自動重新分配 ping-pong 緩衝區以符合合成幀尺寸。兩個插件均實作 `held_cam_ids()` 宣告來源相機依賴。
 
 **MotionDetect** 在背景執行緒以 10 Hz 對縮小版 pipeline 幀進行 MOG2 偵測。在任一配置區域偵測到動作時，儲存全解析度 JPEG 至 `captures/<YYYYMMDD>/motdet_<cam_safe>_<時間戳_微秒>.jpg`。各相機實例的偵測區域（儲存於 `captures/motdet_zones/<cam_safe>_zones.json`）、冷卻計時器與偵測執行緒完全獨立，同時觸發時不會互相干擾。
 
