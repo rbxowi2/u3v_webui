@@ -1,5 +1,5 @@
 """
-state.py — AppState: multi-camera streaming core (6.7.0).
+state.py — AppState: multi-camera streaming core (6.7.1).
 
 Manages a dict of CameraDriver instances, per-camera frame storage,
 session tokens, and viewer tracking.
@@ -158,8 +158,11 @@ class AppState:
         cam_ids = list(self._cameras.keys())
         if not cam_ids:
             return
+        held = manager.collect_held_cam_ids()
         closed_any = False
         for cam_id in cam_ids:
+            if cam_id in held:
+                continue
             if manager.collect_busy_for_camera(cam_id):
                 continue
             log(f"No viewers — auto-closing camera [{cam_id}]")
