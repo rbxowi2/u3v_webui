@@ -402,7 +402,7 @@ DEFAULT_PARAMS: dict = {
 | `AravisDriver` | `aravis_driver.py` | USB3 Vision、GigE | Aravis（GObject） |
 | `UVCDriver` | `uvc_driver.py` | USB Video Class、V4L2 | OpenCV |
 | `RPiDriver` | `rpi_driver.py` | CSI（Raspberry Pi，影片模式） | libcamera |
-| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | libcamera |
+| `RPiImgDriver` | `rpi_img_driver.py` | CSI（Raspberry Pi，靜態拍照模式） | picamera2/libcamera |
 | `VirtualDriver` | `virtual_driver.py` | 合成幀（測試用） | NumPy |
 
 > **靜態拍照模式說明：** `RPiImgDriver` 完全以 `time.sleep()` 控制幀率，不使用感測器定時暫存器。其 `query_native_modes()` 回傳的每筆記錄只含 `{"width": w, "height": h}`，**不含** `"fps"` 欄位；UI 在此類模式下會隱藏 fps 欄。
