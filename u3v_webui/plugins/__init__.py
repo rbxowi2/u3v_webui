@@ -1,5 +1,5 @@
 """
-plugins/__init__.py — PluginManager: runtime plugin registry (6.12.0).
+plugins/__init__.py — PluginManager: runtime plugin registry (6.13.0).
 
 Plugin discovery contract
 -------------------------
@@ -529,6 +529,20 @@ class PluginManager:
             if cam_id and instance_key:
                 self.set_plugin_mode(cam_id, instance_key, mode)
                 emit_state()
+
+        # Call each plugin class's register_routes once for HTTP endpoints
+        _reg: set = set()
+        for _pname, _pinfo in self._available.items():
+            _pcls = _pinfo["cls"]
+            if id(_pcls) in _reg:
+                continue
+            _reg.add(id(_pcls))
+            _tmp = _pcls()
+            self._inject_ctx(_tmp)
+            try:
+                _tmp.register_routes(app, sio, ctx)
+            except Exception as _e:
+                log(f"[Plugin] {_pname} register_routes error: {_e}")
 
     def list_js_urls(self) -> list:
         """Return JS URLs for all available plugins (pre-loaded at page startup)."""
