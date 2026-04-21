@@ -1,6 +1,4 @@
 ## Multi-camera web streaming platform
-
-**Highlights:**
 - Multiple cameras streamed simultaneously; each viewer tracks cameras independently
 - Plugin pipeline — pipeline / display segment markers, freely combine processing (recording, photo, detection, compositing, etc.)
 - Drivers and plugins are independently extensible — drop into the corresponding directory, auto-loaded on startup
