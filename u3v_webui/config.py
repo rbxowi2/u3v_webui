@@ -9,7 +9,7 @@ import os
 import secrets
 
 # ── Version ────────────────────────────────────────────────────────────────────
-VERSION = "6.13.2"
+VERSION = "6.13.3"
 
 # ── User accounts: (username, password, is_admin) ─────────────────────────────
 # Admin: full camera control. Viewer: stream only.
