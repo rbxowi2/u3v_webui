@@ -1585,8 +1585,8 @@ function _applyModeBtn(btn, mode) {
   btn.dataset.mode = mode;
   btn.textContent  = isPipeline ? "P" : "D";
   btn.title        = isPipeline
-    ? "Pipeline — frame modified for recording"
-    : "Display-only — stream only, recording unaffected";
+    ? "Pipeline mode — pipeline segment marker (processed before display)"
+    : "Display mode — pipeline segment marker (processed after pipeline)";
   btn.classList.toggle("mode-display", !isPipeline);
 }
 
