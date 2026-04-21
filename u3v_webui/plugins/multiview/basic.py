@@ -1,5 +1,5 @@
 """
-plugins/multiview/basic.py — MultiViewPlugin (1.1.0)
+plugins/multiview/basic.py — MultiViewPlugin (1.1.1)
 
 Source plugin for virtual cameras: ignores the incoming dummy frame and
 composites frames from up to four real cameras into a split-screen layout.
@@ -59,7 +59,7 @@ class MultiViewPlugin(PluginBase):
 
     @property
     def version(self) -> str:
-        return "1.1.0"
+        return "1.1.1"
 
     @property
     def description(self) -> str:
@@ -72,6 +72,12 @@ class MultiViewPlugin(PluginBase):
 
     def on_unload(self):
         pass
+
+    # ── Dependency guard ──────────────────────────────────────────────────────
+
+    def held_cam_ids(self) -> set:
+        with self._lock:
+            return {c for c in self._cams if c}
 
     # ── Frame processing ──────────────────────────────────────────────────────
 
