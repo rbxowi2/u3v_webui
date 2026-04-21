@@ -1,4 +1,4 @@
-"""plugins/motiondetect/motion.py — MotionDetect plugin (1.0.2)
+"""plugins/motiondetect/motion.py — MotionDetect plugin (1.0.3)
 
 Local plugin: one instance per camera.
 Motion detection uses MOG2 on a downscaled frame (DETECT_WIDTH px wide).
@@ -57,7 +57,7 @@ class MotionDetect(PluginBase):
 
     @property
     def version(self) -> str:
-        return "1.0.2"
+        return "1.0.3"
 
     @property
     def description(self) -> str:
@@ -277,7 +277,8 @@ class MotionDetect(PluginBase):
         now    = datetime.now()
         subdir = os.path.join(CAPTURE_DIR, now.strftime("%Y%m%d"))
         os.makedirs(subdir, exist_ok=True)
-        fname  = f"motdet_{now.strftime('%Y%m%d_%H%M%S')}.jpg"
+        safe   = self._cam_id.replace("/", "_").replace(":", "_").replace(" ", "_")
+        fname  = f"motdet_{safe}_{now.strftime('%Y%m%d_%H%M%S_%f')}.jpg"
         path   = os.path.join(subdir, fname)
         imwrite_fmt(path, frame, "JPG", 85)
         size_mb = os.path.getsize(path) / 1024 ** 2
