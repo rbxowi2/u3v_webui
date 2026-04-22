@@ -1,8 +1,3 @@
-## Multi-camera web streaming platform
-- Multiple cameras streamed simultaneously; each viewer tracks cameras independently
-- Plugin pipeline — pipeline / display segment markers, freely combine processing (recording, photo, detection, compositing, etc.)
-- Drivers and plugins are independently extensible — drop into the corresponding directory, auto-loaded on startup
-- Supports USB3 Vision (Aravis), UVC (V4L2), Raspberry Pi CSI, virtual cameras
 ## 1. Installation
 
 ### System Requirements
