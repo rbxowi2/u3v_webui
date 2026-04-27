@@ -1,0 +1,56 @@
+<!-- stereocalibrate/ui.html — StereoCalibrate plugin (1.0.0) -->
+<div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'&#9660;':'&#9654;'">
+  <span class="collapse-arrow">&#9654;</span>
+  <span>Stereo Calibrate</span>
+</div>
+<div class="collapsible-body">
+  <div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px;">
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Left camera</label>
+      <select class="stereo-cam-left" onchange="stereoOnCamLeft(this)"
+              style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;max-width:160px;"></select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Right camera</label>
+      <select class="stereo-cam-right" onchange="stereoOnCamRight(this)"
+              style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;max-width:160px;"></select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Lens Type</label>
+      <select class="stereo-lens-type" onchange="stereoOnLensType(this)"
+              style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;">
+        <option value="normal">Normal</option>
+        <option value="fisheye">Fisheye</option>
+      </select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;flex:1;">Board corners</span>
+      <input type="number" class="stereo-board-cols" value="9" min="3" max="20"
+             onchange="stereoOnBoardCols(this)"
+             style="width:44px;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 4px;font-size:11px;text-align:center;">
+      <span style="font-size:11px;color:#555;">&#215;</span>
+      <input type="number" class="stereo-board-rows" value="6" min="3" max="20"
+             onchange="stereoOnBoardRows(this)"
+             style="width:44px;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 4px;font-size:11px;text-align:center;">
+    </div>
+
+    <div style="display:flex;align-items:center;gap:6px;">
+      <span style="font-size:11px;color:#aaa;flex:1;">Square (mm)</span>
+      <input type="number" class="stereo-square-size" value="25" min="1" max="500" step="0.5"
+             onchange="stereoOnSquareSize(this)"
+             style="width:60px;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 4px;font-size:11px;text-align:center;">
+    </div>
+
+    <div class="stereo-info-row" style="font-size:10px;color:#666;min-height:14px;line-height:1.5;"></div>
+
+    <button class="btn stereo-btn-open" onclick="stereoOpenModal(this)"
+            style="background:#1a3a5c;color:#6ab0d4;border:1px solid #2a5a8c;font-weight:600;">
+      Calibrate
+    </button>
+
+  </div>
+</div>
