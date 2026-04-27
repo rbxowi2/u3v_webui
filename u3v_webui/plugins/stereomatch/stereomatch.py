@@ -1,4 +1,4 @@
-"""plugins/stereomatch/stereomatch.py — StereoMatch plugin (1.1.0)
+"""plugins/stereomatch/stereomatch.py — StereoMatch plugin (1.1.1)
 
 Live stereo disparity matching from rectified frames.
 
@@ -99,7 +99,7 @@ class StereoMatch(PluginBase):
     @property
     def name(self)        -> str: return "StereoMatch"
     @property
-    def version(self)     -> str: return "1.1.0"
+    def version(self)     -> str: return "1.1.1"
     @property
     def description(self) -> str: return "Live stereo disparity from rectified frames"
 
@@ -205,12 +205,7 @@ class StereoMatch(PluginBase):
         if jpg is None:
             return None
         img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            return None
-        fh, fw = frame.shape[:2]
-        if img.shape[:2] != (fh, fw):
-            img = _letterbox(img, fw, fh)
-        return img
+        return img  # native stereo resolution; streaming layer handles per-viewer scale
 
     # ── Routes ────────────────────────────────────────────────────────────────
 
@@ -259,10 +254,33 @@ class StereoMatch(PluginBase):
                          {"type": "error", "msg": str(e)}, to=_req.sid)
                 return
 
+            # Restore saved params so the worker and UI stay consistent
+            saved = inst._load_match_cal(inst._cam_left, inst._cam_right)
+            if saved:
+                with inst._lock:
+                    inst._algorithm        = saved.get("algorithm",        inst._algorithm)
+                    inst._num_disparities  = saved.get("num_disparities",  inst._num_disparities)
+                    inst._block_size       = saved.get("block_size",       inst._block_size)
+                    inst._p1               = saved.get("p1",               inst._p1)
+                    inst._p2               = saved.get("p2",               inst._p2)
+                    inst._uniqueness_ratio = saved.get("uniqueness_ratio", inst._uniqueness_ratio)
+                    inst._speckle_window   = saved.get("speckle_window",   inst._speckle_window)
+                    inst._speckle_range    = saved.get("speckle_range",    inst._speckle_range)
+
             inst._start_worker()
             with inst._lock:
                 inst._session_active = True
-            sio.emit("match_event", {"type": "started"}, to=_req.sid)
+                params = {
+                    "algorithm":        inst._algorithm,
+                    "num_disparities":  inst._num_disparities,
+                    "block_size":       inst._block_size,
+                    "p1":               inst._p1,
+                    "p2":               inst._p2,
+                    "uniqueness_ratio": inst._uniqueness_ratio,
+                    "speckle_window":   inst._speckle_window,
+                    "speckle_range":    inst._speckle_range,
+                }
+            sio.emit("match_event", {"type": "started", **params}, to=_req.sid)
             emit_state()
 
         @sio.on("match_set_params")

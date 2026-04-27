@@ -1,4 +1,4 @@
-// stereomatch/ui.js — StereoMatch plugin frontend (1.1.0)
+// stereomatch/ui.js — StereoMatch plugin frontend (1.1.1)
 
 (function () {
   'use strict';
@@ -43,6 +43,11 @@
   let _elP2Auto    = null;
   let _elBtnSave   = null;
   let _elBtnCancel = null;
+
+  // Slider element refs (set in _buildModal, used for param sync)
+  let _elUrSlider  = null; let _elUrVal  = null;
+  let _elSwsSlider = null; let _elSwsVal = null;
+  let _elSrSlider  = null; let _elSrVal  = null;
 
   // ── DOM helpers ───────────────────────────────────────────────────────────
   function _blk(el)    { return el.closest('.plugin-ui-block'); }
@@ -316,6 +321,9 @@
     const urSl  = _mkSliderRow('uniquenessRatio', 0, 25,  1,  _ur,  v => { _ur  = v; _sendParams(); });
     const swsSl = _mkSliderRow('speckleWindow',   0, 200, 10, _sws, v => { _sws = v; _sendParams(); });
     const srSl  = _mkSliderRow('speckleRange',    1, 32,  1,  _sr,  v => { _sr  = v; _sendParams(); });
+    _elUrSlider  = urSl.slider;  _elUrVal  = urSl.valEl;
+    _elSwsSlider = swsSl.slider; _elSwsVal = swsSl.valEl;
+    _elSrSlider  = srSl.slider;  _elSrVal  = srSl.valEl;
 
     // Buttons
     _elBtnSave   = _mkBtn('Save',  '#1a3a1a', '#7dcf7d', '#2a6a2a', _onSave);
@@ -444,6 +452,51 @@
   socket.on('match_event', (data) => {
     if (data.type === 'started') {
       _running = true;
+
+      // Sync UI to server-side params (saved values restored on open)
+      if (data.algorithm !== undefined)       _setAlgo(data.algorithm);
+      if (data.num_disparities !== undefined) {
+        _nd = data.num_disparities;
+        if (_elNdSel) _elNdSel.value = String(_nd);
+      }
+      if (data.block_size !== undefined) {
+        _bs = data.block_size;
+        if (_elBsSel) _elBsSel.value = String(_bs);
+      }
+      if (data.p1 !== undefined) {
+        _p1 = data.p1;
+        if (_elP1Auto)  _elP1Auto.checked      = (_p1 < 0);
+        if (_elP1Input) {
+          _elP1Input.value    = String(_p1 > 0 ? _p1 : 8 * 3 * _bs * _bs);
+          _elP1Input.disabled = (_p1 < 0);
+          _elP1Input.style.opacity = _p1 < 0 ? '0.4' : '1';
+        }
+      }
+      if (data.p2 !== undefined) {
+        _p2 = data.p2;
+        if (_elP2Auto)  _elP2Auto.checked      = (_p2 < 0);
+        if (_elP2Input) {
+          _elP2Input.value    = String(_p2 > 0 ? _p2 : 32 * 3 * _bs * _bs);
+          _elP2Input.disabled = (_p2 < 0);
+          _elP2Input.style.opacity = _p2 < 0 ? '0.4' : '1';
+        }
+      }
+      if (data.uniqueness_ratio !== undefined) {
+        _ur = data.uniqueness_ratio;
+        if (_elUrSlider) _elUrSlider.value    = String(_ur);
+        if (_elUrVal)    _elUrVal.textContent = String(_ur);
+      }
+      if (data.speckle_window !== undefined) {
+        _sws = data.speckle_window;
+        if (_elSwsSlider) _elSwsSlider.value    = String(_sws);
+        if (_elSwsVal)    _elSwsVal.textContent = String(_sws);
+      }
+      if (data.speckle_range !== undefined) {
+        _sr = data.speckle_range;
+        if (_elSrSlider) _elSrSlider.value    = String(_sr);
+        if (_elSrVal)    _elSrVal.textContent = String(_sr);
+      }
+
       if (_elStatus) {
         _elStatus.textContent = `執行中 — ${_algo.toUpperCase()}`;
         _elStatus.style.color = '#7dcf7d';
