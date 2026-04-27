@@ -1,12 +1,11 @@
-"""plugins/lenscalibrate/calibrate.py — LensCalibrate plugin (2.2.0)
+"""plugins/lenscalibrate/calibrate.py — LensCalibrate plugin (2.3.0)
 
 Two-stage calibration for fisheye lenses:
-  Stage 1 (pinhole): cv2.calibrateCamera + SB detection by default.
-           Collect shots until RMS < 0.5, then click "Enter Stage 2".
-  Stage 2 (fisheye): cv2.fisheye.calibrate + Classic detection.
+  Stage 1 (fisheye, D fixed): cv2.fisheye.calibrate with D=[0,0,0,0] fixed.
+           Classic corner detection. Collect shots until K converges, then "Enter Stage 2".
+  Stage 2 (fisheye, D free): cv2.fisheye.calibrate with D free to update.
            Uses Stage 1 K as intrinsic guess; D₀ = [0,0,0,0].
-           min_shots_uncond = 0 in worker (first shot always accepted).
-Normal lenses use Stage 1 only (no Stage 2 available).
+Normal lenses use Stage 1 only (pinhole, no Stage 2). Classic detection only.
 Reset always returns to Stage 1.
 
 - v2.1.2: robust circle detection (Otsu + conncomp + fill); balance=1.0 preview maps.
@@ -15,6 +14,8 @@ Reset always returns to Stage 1.
 - v2.1.14: Fisheye session defaults to Classic detection.
 - v2.2.0: Remove K₀ image-circle section; two-stage fisheye calibration.
           Always preload K on session open; D only if lens type matches saved.
+- v2.3.0: Stage 1 fisheye uses fisheye model with D fixed at 0 (was pinhole).
+          Remove SB detection option; Classic detection only for all cases.
 """
 
 import io
@@ -36,7 +37,7 @@ from ...utils import log
 CALIB_DIR               = os.path.join(CAPTURE_DIR, "calibration")
 SAVE_MIN_SHOTS          = 3      # minimum accepted shots required to save
 AUTO_COOLDOWN           = 1.5
-BLUR_THRESHOLD          = 100.0
+MAX_CAL_SHOTS           = 30     # max shots fed to calibrate(); oldest dropped when exceeded
 
 _EYE3 = np.eye(3, dtype=np.float64)
 
@@ -57,9 +58,6 @@ class LensCalibrate(PluginBase):
         self._board_cols  = 9
         self._board_rows  = 6
         self._square_size = 25.0
-
-        # Session-UI settings (reset on each session open)
-        self._detect_sb = True
 
         # Session state
         self._session_active   = False
@@ -106,7 +104,7 @@ class LensCalibrate(PluginBase):
     def name(self) -> str:    return "LensCalibrate"
 
     @property
-    def version(self) -> str: return "2.2.0"
+    def version(self) -> str: return "2.3.0"
 
     @property
     def description(self) -> str:
@@ -328,15 +326,6 @@ class LensCalibrate(PluginBase):
                 return
             sio.emit("calib_auto_status", dict(result, cam_id=cam_id, action="remove"))
 
-        @sio.on("calib_set_detect_method")
-        def _calib_set_detect_method(data):
-            if not is_admin(): return
-            cam_id = data.get("cam_id", "")
-            inst   = LensCalibrate._instances.get(cam_id)
-            if inst is None: return
-            with inst._lock:
-                inst._detect_sb = bool(data.get("use_sb", True))
-
         @sio.on("calib_save")
         def _calib_save(data):
             if not is_admin(): return
@@ -361,7 +350,6 @@ class LensCalibrate(PluginBase):
         with self._lock:
             self._session_active  = True
             self._auto_enabled    = False
-            self._detect_sb       = (self._lens_type != "fisheye")
             self._shots_obj       = []
             self._shots_img       = []
             self._shot_centers    = []
@@ -405,14 +393,12 @@ class LensCalibrate(PluginBase):
             self._auto_enabled   = False
             self._stage          = 1
             self._stage1_K       = None
-            self._detect_sb      = (self._lens_type != "fisheye")
         log(f"[LensCalibrate] Reset to Stage 1 [{self._cam_id}]")
 
     def _enter_stage2(self, stage1_K: np.ndarray):
         with self._lock:
             self._stage1_K       = stage1_K
             self._stage          = 2
-            self._detect_sb      = False   # Stage 2 always uses Classic
             self._shots_obj      = []
             self._shots_img      = []
             self._shot_centers   = []
@@ -442,11 +428,14 @@ class LensCalibrate(PluginBase):
             img_size  = self._img_size
             lens      = self._lens_type
             stage     = self._stage
-            obj_pts   = list(self._shots_obj)
-            img_pts   = list(self._shots_img)
+            all_obj   = list(self._shots_obj)
+            all_img   = list(self._shots_img)
             centers   = list(self._shot_centers)
 
-        cal_type = "normal" if (lens == "fisheye" and stage == 1) else lens
+        cal_type = lens
+        fix_D    = (lens == "fisheye" and stage == 1)
+        obj_pts  = all_obj[-MAX_CAL_SHOTS:]
+        img_pts  = all_img[-MAX_CAL_SHOTS:]
 
         if remaining == 0:
             with self._lock:
@@ -459,7 +448,7 @@ class LensCalibrate(PluginBase):
 
         try:
             w, h = img_size
-            rms, K, D = self._run_cv_calibrate(obj_pts, img_pts, w, h, cal_type)
+            rms, K, D = self._run_cv_calibrate(obj_pts, img_pts, w, h, cal_type, fix_D=fix_D)
             maps = self._rebuild_maps(K, D, img_size, cal_type)
             with self._lock:
                 self._K = K;  self._D = D
@@ -509,7 +498,6 @@ class LensCalibrate(PluginBase):
                     break
                 cols    = self._board_cols
                 rows    = self._board_rows
-                use_sb  = self._detect_sb
                 K_c     = self._K.copy() if self._K is not None else None
                 D_c     = self._D.copy() if self._D is not None else None
                 lens_c  = self._lens_type
@@ -527,29 +515,21 @@ class LensCalibrate(PluginBase):
             fh, fw = gray.shape[:2]
             frame = None
 
-            if use_sb:
-                found, corners = cv2.findChessboardCornersSB(gray, (cols, rows), flags=0)
-            else:
-                found, corners = cv2.findChessboardCorners(
-                    gray, (cols, rows),
-                    flags=cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
-                )
-                if found:
-                    crit    = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-                    corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), crit)
+            found, corners = cv2.findChessboardCorners(
+                gray, (cols, rows),
+                flags=cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
+            )
+            if found:
+                crit    = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+                corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), crit)
             if found:
                 corners_norm = [[float(c[0][0]) / fw, float(c[0][1]) / fh]
                                 for c in corners]
 
-                cap_frame = self._state.get_latest_frame(self._cam_id)
-                auto_triggered = False
-                if cap_frame is not None:
-                    auto_triggered = self._try_auto_capture(
-                        cap_frame, corners, cols, rows, fw, fh)
+                auto_triggered = self._try_auto_capture(corners, cols, rows, fw, fh)
 
                 # Compute undistorted corner positions (cache new_K across frames)
-                # Use effective cal_type for undistortion (pinhole in Stage 1)
-                cal_type_c = "normal" if (lens_c == "fisheye" and stage_c == 1) else lens_c
+                cal_type_c = lens_c
                 corners_corr = None
                 if K_c is not None and D_c is not None:
                     try:
@@ -596,7 +576,7 @@ class LensCalibrate(PluginBase):
 
     # ── Auto-capture ──────────────────────────────────────────────────────────
 
-    def _try_auto_capture(self, frame, corners, cols, rows, fw, fh) -> bool:
+    def _try_auto_capture(self, corners, cols, rows, fw, fh) -> bool:
         with self._lock:
             if not self._auto_enabled:
                 return False
@@ -640,17 +620,19 @@ class LensCalibrate(PluginBase):
 
     def _calibration_worker(self, new_obj, new_img, img_size, cx, cy, lens_type):
         with self._lock:
-            obj_pts  = list(self._shots_obj) + [new_obj]
-            img_pts  = list(self._shots_img) + [new_img]
+            all_obj  = list(self._shots_obj) + [new_obj]
+            all_img  = list(self._shots_img) + [new_img]
             old_rms  = self._rms
             accepted = self._accepted
             stage    = self._stage
+        obj_pts = all_obj[-MAX_CAL_SHOTS:]
+        img_pts = all_img[-MAX_CAL_SHOTS:]
         w, h = img_size
-        # Stage 1 fisheye uses pinhole model; Stage 2 fisheye uses fisheye model
-        cal_type = "normal" if (lens_type == "fisheye" and stage == 1) else lens_type
+        cal_type = lens_type
+        fix_D    = (lens_type == "fisheye" and stage == 1)
 
         try:
-            rms, K, D = self._run_cv_calibrate(obj_pts, img_pts, w, h, cal_type)
+            rms, K, D = self._run_cv_calibrate(obj_pts, img_pts, w, h, cal_type, fix_D=fix_D)
         except Exception as e:
             log(f"[LensCalibrate] cal worker error: {e}")
             with self._lock:
@@ -704,31 +686,54 @@ class LensCalibrate(PluginBase):
 
     # ── CV calibration ────────────────────────────────────────────────────────
 
-    def _run_cv_calibrate(self, obj_pts, img_pts, w, h, cal_type):
-        """cal_type is the actual model: 'normal' or 'fisheye'.
-        For fisheye Stage 1, caller passes 'normal'. Stage 2 passes 'fisheye'.
+    def _run_cv_calibrate(self, obj_pts, img_pts, w, h, cal_type, fix_D=False):
+        """cal_type: 'normal' (pinhole) or 'fisheye'.
+        fix_D=True: fisheye Stage 1 — solve only K, D stays [0,0,0,0].
+        fix_D=False: fisheye Stage 2 — solve K and D freely.
         """
         if cal_type == "fisheye":
-            with self._lock:
-                K0 = self._stage1_K.copy() if self._stage1_K is not None else None
             obj_f = [o.reshape(-1, 1, 3).astype(np.float64) for o in obj_pts]
             img_f = [i.reshape(-1, 1, 2).astype(np.float64) for i in img_pts]
-            guess_flag = cv2.fisheye.CALIB_USE_INTRINSIC_GUESS if K0 is not None else 0
-            for extra in [
-                cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC | cv2.fisheye.CALIB_FIX_SKEW,
-                cv2.fisheye.CALIB_FIX_SKEW,
-                0,
-            ]:
-                try:
-                    K_t = K0.copy() if K0 is not None else np.zeros((3, 3))
-                    D_t = np.zeros((4, 1), dtype=np.float64)
-                    r, Kt, Dt, _, _ = cv2.fisheye.calibrate(
-                        obj_f, img_f, (w, h), K_t, D_t, flags=guess_flag | extra
-                    )
-                    return r, Kt, Dt
-                except cv2.error:
-                    pass
-            raise RuntimeError("Fisheye calibration failed for all flag combinations")
+            if fix_D:
+                # Stage 1: fisheye model with all D coefficients frozen at 0.
+                # Finds K in the correct model space without distortion interference.
+                locked = (cv2.fisheye.CALIB_FIX_K1 | cv2.fisheye.CALIB_FIX_K2 |
+                          cv2.fisheye.CALIB_FIX_K3 | cv2.fisheye.CALIB_FIX_K4)
+                for extra in [
+                    cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC | cv2.fisheye.CALIB_FIX_SKEW | locked,
+                    cv2.fisheye.CALIB_FIX_SKEW | locked,
+                    locked,
+                ]:
+                    try:
+                        K_t = np.zeros((3, 3))
+                        D_t = np.zeros((4, 1), dtype=np.float64)
+                        r, Kt, Dt, _, _ = cv2.fisheye.calibrate(
+                            obj_f, img_f, (w, h), K_t, D_t, flags=extra
+                        )
+                        return r, Kt, Dt
+                    except cv2.error:
+                        pass
+                raise RuntimeError("Fisheye Stage 1 calibration failed for all flag combinations")
+            else:
+                # Stage 2: K₀ from Stage 1, D free to update.
+                with self._lock:
+                    K0 = self._stage1_K.copy() if self._stage1_K is not None else None
+                guess_flag = cv2.fisheye.CALIB_USE_INTRINSIC_GUESS if K0 is not None else 0
+                for extra in [
+                    cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC | cv2.fisheye.CALIB_FIX_SKEW,
+                    cv2.fisheye.CALIB_FIX_SKEW,
+                    0,
+                ]:
+                    try:
+                        K_t = K0.copy() if K0 is not None else np.zeros((3, 3))
+                        D_t = np.zeros((4, 1), dtype=np.float64)
+                        r, Kt, Dt, _, _ = cv2.fisheye.calibrate(
+                            obj_f, img_f, (w, h), K_t, D_t, flags=guess_flag | extra
+                        )
+                        return r, Kt, Dt
+                    except cv2.error:
+                        pass
+                raise RuntimeError("Fisheye calibration failed for all flag combinations")
         else:
             rms, K, D, _, _ = cv2.calibrateCamera(obj_pts, img_pts, (w, h), None, None)
             return rms, K, D
@@ -771,9 +776,6 @@ class LensCalibrate(PluginBase):
         with self._lock:
             lens  = self._lens_type
             stage = self._stage
-            if lens == "fisheye" and stage == 1:
-                return {"type": "save_result", "ok": False,
-                        "error": "Fisheye: complete Stage 2 before saving"}
             if self._accepted < SAVE_MIN_SHOTS:
                 return {"type": "save_result", "ok": False,
                         "error": f"Need at least {SAVE_MIN_SHOTS} accepted shots (have {self._accepted})"}

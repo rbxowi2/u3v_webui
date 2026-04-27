@@ -1,8 +1,7 @@
-// lenscalibrate/ui.js — LensCalibrate plugin frontend (2.2.0)
-// v2.2.0: Remove K₀ image-circle section; add two-stage fisheye calibration.
-//         Stage 1 (pinhole/SB) → RMS < 0.5 → Enter Stage 2 (fisheye/Classic).
-//         Always preload K on session open; D only if lens type matches.
-//         Remove min-shots UI; add Jump-to-Stage-2 button (uses saved K).
+// lenscalibrate/ui.js — LensCalibrate plugin frontend (2.3.0)
+// v2.3.0: Stage 1 fisheye uses fisheye model with D=0 (was pinhole/SB).
+//         Remove SB detection option; Classic detection only for all cases.
+//         Stage 2 button enabled as soon as Stage 1 has any accepted shot.
 
 (function () {
   'use strict';
@@ -45,9 +44,6 @@
 
   // DOM refs
   let _elDetectInd     = null;
-  // Detection method toggle (now in main panel, outside K₀)
-  let _elBtnDetectSb      = null;
-  let _elBtnDetectClassic = null;
   // Stage section (fisheye only)
   let _elStageSection   = null;
   let _elStageInd       = null;
@@ -122,14 +118,7 @@
       textAlign: 'center', padding: '2px 0',
     });
 
-    // 2. Detection method toggle (SB / Classic)
-    const detectMethodRow = document.createElement('div');
-    Object.assign(detectMethodRow.style, { display: 'flex', gap: '4px' });
-    _elBtnDetectSb      = _mkSmBtn('SB',      true,  () => _onDetectMethod(true));
-    _elBtnDetectClassic = _mkSmBtn('Classic',  false, () => _onDetectMethod(false));
-    detectMethodRow.append(_elBtnDetectSb, _elBtnDetectClassic);
-
-    // 3. Stage section (fisheye only)
+    // 2. Stage section (fisheye only)
     _elStageSection = document.createElement('div');
     Object.assign(_elStageSection.style, {
       display: 'none', flexDirection: 'column', gap: '6px',
@@ -233,7 +222,6 @@
 
     panel.append(
       _elDetectInd,
-      detectMethodRow,
       _mkDivider(),
       _elStageSection,
       statsWrap,
@@ -316,22 +304,21 @@
     }
     if (_elStageSection) _elStageSection.style.display = 'flex';
     if (_stage === 1) {
-      const rmsOk = _lastRms !== null && _lastRms < 0.5;
       _elStageInd.innerHTML =
         `<span style="color:#6ab0d4;font-weight:600;">Stage 1</span>` +
-        ` <span style="color:#777;">Pinhole · SB detection</span>` +
+        ` <span style="color:#777;">Fisheye · D=0 · Classic</span>` +
         (_lastRms !== null
-          ? `<br><span style="color:${_lastRms < 0.5 ? '#7dcf7d' : _lastRms < 1.0 ? '#e8a43c' : '#e74c3c'};">RMS ${_lastRms.toFixed(4)}</span>` +
-            (!rmsOk ? `<span style="color:#555;"> — need &lt; 0.5</span>` : `<span style="color:#7dcf7d;"> — ready</span>`)
+          ? `<br><span style="color:${_lastRms < 1.0 ? '#e8a43c' : '#ccc'};">RMS ${_lastRms.toFixed(4)}</span>` +
+            (_accepted > 0 ? `<span style="color:#7dcf7d;"> — ready</span>` : '')
           : '');
       _elBtnStage2.textContent = 'Enter Stage 2 →';
-      _setBtnEnabled(_elBtnStage2, rmsOk && _accepted > 0);
+      _setBtnEnabled(_elBtnStage2, _accepted > 0 && _lastRms !== null);
       _elBtnJumpStage2.style.display = _hasPreloadedK ? 'block' : 'none';
       _setBtnEnabled(_elBtnJumpStage2, _hasPreloadedK);
     } else {
       _elStageInd.innerHTML =
         `<span style="color:#7dcf7d;font-weight:600;">Stage 2</span>` +
-        ` <span style="color:#777;">Fisheye · Classic detection</span>`;
+        ` <span style="color:#777;">Fisheye · D free · Classic</span>`;
       _setBtnEnabled(_elBtnStage2, false);
       _elBtnStage2.textContent = 'Stage 2 active';
       _elBtnJumpStage2.style.display = 'none';
@@ -396,11 +383,6 @@
       _setBtnEnabled(_elBtnSave, false);
       _setBtnEnabled(_elBtnReset, true);
       _setBtnEnabled(_elBtnRemoveShot, false);
-
-      // Both normal and fisheye Stage 1 start with SB
-      _elBtnDetectSb._setActive(true);
-      _elBtnDetectClassic._setActive(false);
-      if (_camId) socket.emit('calib_set_detect_method', { cam_id: _camId, use_sb: true });
 
       // Stage section (fisheye only)
       _updateStageUI();
@@ -479,7 +461,7 @@
     const fx = _matK[0][0], fy = _matK[1][1];
     const cx = _matK[0][2], cy = _matK[1][2];
     const D  = _matD || [];
-    const isFish = (_lensType === 'fisheye' && _stage === 2);
+    const isFish = (_lensType === 'fisheye');
     const dLbl = isFish ? ['k1','k2','k3','k4'] : ['k1','k2','p1','p2'];
 
     const lines = [
@@ -653,9 +635,6 @@
       });
       _setBtnEnabled(_elBtnSave, false);
       _setBtnEnabled(_elBtnRemoveShot, false);
-      // Stage 2 always uses Classic
-      _elBtnDetectSb._setActive(false);
-      _elBtnDetectClassic._setActive(true);
       _updateStageUI();
       return;
     }
@@ -677,10 +656,6 @@
       _setBtnEnabled(_elBtnSave, false);
       _setBtnEnabled(_elBtnRemoveShot, false);
       _elBtnStage2.textContent = 'Enter Stage 2 →';
-      // Restore stage 1 detection method (SB for both normal and fisheye stage 1)
-      _elBtnDetectSb._setActive(true);
-      _elBtnDetectClassic._setActive(false);
-      if (_camId) socket.emit('calib_set_detect_method', { cam_id: _camId, use_sb: true });
       _updateStageUI();
       return;
     }
@@ -734,9 +709,7 @@
         (_lastReason ? ` <span style="color:#777;">${_esc(_lastReason)}</span>` : '');
     }
 
-    // Save enabled: normal lens any stage, fisheye only in stage 2
-    const saveOk = _accepted >= SAVE_MIN_SHOTS &&
-                   (_lensType !== 'fisheye' || _stage === 2);
+    const saveOk = _accepted >= SAVE_MIN_SHOTS;
     _setBtnEnabled(_elBtnSave, saveOk);
     _setBtnEnabled(_elBtnRemoveShot, _accepted > 0);
     _updateStageUI();
@@ -767,7 +740,7 @@
     _stopPoll();
     if (!data.ok) {
       _elLastAction.innerHTML = `<span style="color:#e74c3c;">Save failed: ${_esc(data.error)}</span>`;
-      _setBtnEnabled(_elBtnSave, _accepted >= SAVE_MIN_SHOTS && (_lensType !== 'fisheye' || _stage === 2));
+      _setBtnEnabled(_elBtnSave, _accepted >= SAVE_MIN_SHOTS);
       return;
     }
     const rmsCol = data.rms < 0.5 ? '#7dcf7d' : data.rms < 1.0 ? '#e8a43c' : '#e74c3c';
@@ -797,12 +770,6 @@
     socket.emit('calib_remove_shot', { cam_id: _camId });
   }
 
-  function _onDetectMethod(useSb) {
-    _elBtnDetectSb._setActive(useSb);
-    _elBtnDetectClassic._setActive(!useSb);
-    if (_camId) socket.emit('calib_set_detect_method', { cam_id: _camId, use_sb: useSb });
-  }
-
   function _preloadKD(K, D) {
     _matK = K;
     _matD = D ? (D.slice ? D.slice(0, 4) : D) : null;
@@ -830,11 +797,6 @@
 
   function _onSave() {
     if (!_camId || _sessionSaved || _accepted < SAVE_MIN_SHOTS) return;
-    if (_lensType === 'fisheye' && _stage === 1) {
-      _elLastAction.innerHTML =
-        '<span style="color:#e8a43c;">Fisheye: enter Stage 2 before saving.</span>';
-      return;
-    }
     _setBtnEnabled(_elBtnSave, false);
     socket.emit('calib_save', { cam_id: _camId });
   }
