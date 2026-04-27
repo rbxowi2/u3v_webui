@@ -1,4 +1,4 @@
-// stereorectify/ui.js — StereoRectify plugin frontend (1.0.0)
+// stereorectify/ui.js — StereoRectify plugin frontend (1.1.0)
 
 (function () {
   'use strict';
@@ -12,6 +12,7 @@
   let _camLeft  = '';
   let _camRight = '';
   let _alpha    = 1.0;
+  let _fovOut   = 0.0;   // 0 = use alpha; >0 = H-FOV in degrees
   let _showSide = 'L';
 
   let _computed   = false;
@@ -29,6 +30,7 @@
   let _elRoiL        = null;
   let _elRoiR        = null;
   let _elAlphaInput  = null;
+  let _elFovInput    = null;
   let _elToggleSideL = null;
   let _elToggleSideR = null;
   let _elBtnShowRect = null;
@@ -171,12 +173,48 @@
       if (!_camId) return;
       const v = Math.max(0, Math.min(1, parseFloat(_elAlphaInput.value) || 0));
       _elAlphaInput.value = v;
+      _alpha = v;
+      _fovOut = 0;
+      if (_elFovInput) _elFovInput.value = '0';
+      _updateFovAlphaState();
       socket.emit('rectify_set_alpha', { cam_id: _camId, alpha: v });
     });
     const alphaHint = document.createElement('span');
     alphaHint.textContent = '0=crop  1=full';
     Object.assign(alphaHint.style, { fontSize: '10px', color: '#555' });
     alphaRow.append(alphaLbl, _elAlphaInput);
+
+    // FOV row
+    const fovRow = document.createElement('div');
+    Object.assign(fovRow.style, { display: 'flex', alignItems: 'center', gap: '6px' });
+    const fovLbl = document.createElement('span');
+    fovLbl.textContent = 'FOV out';
+    Object.assign(fovLbl.style, { fontSize: '11px', color: '#777', flex: '1' });
+    _elFovInput = document.createElement('input');
+    _elFovInput.type = 'number';
+    _elFovInput.min = '0'; _elFovInput.max = '179'; _elFovInput.step = '1';
+    _elFovInput.value = '0';
+    Object.assign(_elFovInput.style, {
+      width: '54px', background: '#2a2a2a', color: '#d4d4d4',
+      border: '1px solid #444', borderRadius: '3px', padding: '3px 4px',
+      fontSize: '11px', textAlign: 'center',
+    });
+    _elFovInput.addEventListener('change', () => {
+      if (!_camId) return;
+      const v = Math.max(0, Math.min(179, parseFloat(_elFovInput.value) || 0));
+      _elFovInput.value = v;
+      _fovOut = v;
+      _updateFovAlphaState();
+      if (v > 0) {
+        socket.emit('rectify_set_fov', { cam_id: _camId, fov_out: v });
+      } else {
+        socket.emit('rectify_set_alpha', { cam_id: _camId, alpha: _alpha });
+      }
+    });
+    const fovHint = document.createElement('span');
+    fovHint.textContent = '° (0=off)';
+    Object.assign(fovHint.style, { fontSize: '10px', color: '#555' });
+    fovRow.append(fovLbl, _elFovInput);
 
     // ROI info
     const roiBox = document.createElement('div');
@@ -199,7 +237,7 @@
     _setBtnEnabled(_elBtnSave, false);
 
     panel.append(
-      _elStatus, alphaRow, alphaHint, roiBox,
+      _elStatus, alphaRow, alphaHint, fovRow, fovHint, roiBox,
       _elBtnShowRect, _elBtnSave, _elBtnCancel,
     );
 
@@ -274,6 +312,17 @@
   }
 
   // ── UI updates ────────────────────────────────────────────────────────────
+  function _updateFovAlphaState() {
+    const usingFov = _fovOut > 0;
+    if (_elAlphaInput) {
+      _elAlphaInput.disabled = usingFov;
+      _elAlphaInput.style.opacity = usingFov ? '0.4' : '1';
+    }
+    if (_elFovInput) {
+      _elFovInput.disabled = false;
+    }
+  }
+
   function _setSide(side) {
     _showSide = side;
     if (_elToggleSideL) _elToggleSideL._setActive(side === 'L');
@@ -336,6 +385,8 @@
     if (_elRoiR)      _elRoiR.textContent   = 'ROI R: —';
     if (_elBtnShowRect) _elBtnShowRect.textContent = 'Show Raw';
     if (_elAlphaInput)  _elAlphaInput.value  = String(_alpha);
+    if (_elFovInput)    _elFovInput.value    = String(_fovOut);
+    _updateFovAlphaState();
     _setBtnEnabled(_elBtnSave, false);
     _setSide('L');
 
@@ -347,6 +398,7 @@
       cam_left:  _camLeft,
       cam_right: _camRight,
       alpha:     _alpha,
+      fov_out:   _fovOut,
     });
   };
 
@@ -358,10 +410,14 @@
       _imgSize   = data.image_size || null;
       _roi1      = data.roi1 || null;
       _roi2      = data.roi2 || null;
-      _alpha     = data.alpha != null ? data.alpha : _alpha;
+      _alpha     = data.alpha   != null ? data.alpha   : _alpha;
+      _fovOut    = data.fov_out != null ? data.fov_out : _fovOut;
       if (_elAlphaInput) _elAlphaInput.value = _alpha.toFixed(2);
+      if (_elFovInput)   _elFovInput.value   = _fovOut.toFixed(0);
+      _updateFovAlphaState();
       if (_elStatus) {
-        _elStatus.textContent = `Done — ${_lensType} | alpha ${_alpha.toFixed(2)}`;
+        const fovStr = _fovOut > 0 ? ` | FOV ${_fovOut.toFixed(0)}°` : ` | alpha ${_alpha.toFixed(2)}`;
+        _elStatus.textContent = `Done — ${_lensType}${fovStr}`;
         _elStatus.style.color = '#7dcf7d';
       }
       _updateRoiDisplay();

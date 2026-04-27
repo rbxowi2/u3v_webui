@@ -1,4 +1,4 @@
-"""plugins/stereorectify/stereorectify.py — StereoRectify plugin (1.0.0)
+"""plugins/stereorectify/stereorectify.py — StereoRectify plugin (1.1.0)
 
 Computes epipolar rectification from StereoCalibrate data.
 Single-shot computation — no iterative capture loop.
@@ -16,6 +16,7 @@ Rectification maps are recomputed at runtime from these values.
 
 import io
 import json
+import math
 import os
 import threading
 from datetime import datetime
@@ -47,6 +48,7 @@ class StereoRectify(PluginBase):
         self._cam_left  = ""
         self._cam_right = ""
         self._alpha     = 1.0   # 0 = crop to valid pixels, 1 = full image
+        self._fov_out   = 0.0   # 0 = use alpha; >0 = output H-FOV in degrees
 
         # Session state
         self._session_active = False
@@ -74,7 +76,7 @@ class StereoRectify(PluginBase):
     def name(self) -> str:    return "StereoRectify"
 
     @property
-    def version(self) -> str: return "1.0.0"
+    def version(self) -> str: return "1.1.0"
 
     @property
     def description(self) -> str:
@@ -104,6 +106,7 @@ class StereoRectify(PluginBase):
             "rectify_cam_left":      self._cam_left,
             "rectify_cam_right":     self._cam_right,
             "rectify_alpha":         self._alpha,
+            "rectify_fov_out":       self._fov_out,
             "rectify_has_data":      cal is not None,
             "rectify_calibrated_at": cal["calibrated_at"] if cal else None,
             "rectify_session_active": active,
@@ -127,6 +130,10 @@ class StereoRectify(PluginBase):
         if key == "rectify_alpha":
             with self._lock:
                 self._alpha = max(0.0, min(1.0, float(value)))
+            return True
+        if key == "rectify_fov_out":
+            with self._lock:
+                self._fov_out = max(0.0, min(179.0, float(value)))
             return True
         return False
 
@@ -174,6 +181,7 @@ class StereoRectify(PluginBase):
             cam_left  = data.get("cam_left",  "")
             cam_right = data.get("cam_right", "")
             alpha     = float(data.get("alpha", 1.0))
+            fov_out   = float(data.get("fov_out", 0.0))
 
             inst = StereoRectify._instances.get(cam_id)
             if inst is None:
@@ -186,10 +194,11 @@ class StereoRectify(PluginBase):
                 inst._cam_left  = cam_left  or inst._cam_left
                 inst._cam_right = cam_right or inst._cam_right
                 inst._alpha     = max(0.0, min(1.0, alpha))
+                inst._fov_out   = max(0.0, min(179.0, fov_out))
 
             try:
                 result = inst._run_rectify(
-                    inst._cam_left, inst._cam_right, inst._alpha)
+                    inst._cam_left, inst._cam_right, inst._alpha, inst._fov_out)
             except Exception as e:
                 log(f"[StereoRectify] rectify failed: {e}")
                 sio.emit("rectify_event",
@@ -210,9 +219,28 @@ class StereoRectify(PluginBase):
             inst   = StereoRectify._instances.get(cam_id)
             if inst is None: return
             with inst._lock:
-                inst._alpha = max(0.0, min(1.0, alpha))
+                inst._alpha   = max(0.0, min(1.0, alpha))
+                inst._fov_out = 0.0   # alpha mode clears fov_out
             try:
-                result = inst._run_rectify(inst._cam_left, inst._cam_right, inst._alpha)
+                result = inst._run_rectify(inst._cam_left, inst._cam_right,
+                                           inst._alpha, 0.0)
+                sio.emit("rectify_event", {"type": "computed", **result}, to=_req.sid)
+            except Exception as e:
+                sio.emit("rectify_event",
+                         {"type": "error", "msg": str(e)}, to=_req.sid)
+
+        @sio.on("rectify_set_fov")
+        def _rectify_set_fov(data):
+            if not is_admin(): return
+            cam_id  = data.get("cam_id", "")
+            fov_out = float(data.get("fov_out", 0.0))
+            inst    = StereoRectify._instances.get(cam_id)
+            if inst is None: return
+            with inst._lock:
+                inst._fov_out = max(0.0, min(179.0, fov_out))
+            try:
+                result = inst._run_rectify(inst._cam_left, inst._cam_right,
+                                           inst._alpha, inst._fov_out)
                 sio.emit("rectify_event", {"type": "computed", **result}, to=_req.sid)
             except Exception as e:
                 sio.emit("rectify_event",
@@ -240,7 +268,8 @@ class StereoRectify(PluginBase):
 
     # ── Rectification computation ─────────────────────────────────────────────
 
-    def _run_rectify(self, cam_left: str, cam_right: str, alpha: float) -> dict:
+    def _run_rectify(self, cam_left: str, cam_right: str,
+                     alpha: float, fov_out: float = 0.0) -> dict:
         cal = self._load_stereo_cal_data(cam_left, cam_right)
         if cal is None:
             raise RuntimeError(
@@ -272,6 +301,31 @@ class StereoRectify(PluginBase):
             (w, h), R, T, alpha=alpha,
         )
 
+        if fov_out > 0:
+            # Override output FOV: recompute P1/P2 with desired focal length
+            f_new  = (w / 2.0) / math.tan(math.radians(fov_out / 2.0))
+            cx_new = w / 2.0
+            cy_new = h / 2.0
+            f_old  = float(P1[0, 0])
+            scale  = (f_new / f_old) if f_old != 0 else 1.0
+            P1 = P1.copy()
+            P1[0, 0] = f_new; P1[1, 1] = f_new
+            P1[0, 2] = cx_new; P1[1, 2] = cy_new
+            P2 = P2.copy()
+            P2[0, 0] = f_new; P2[1, 1] = f_new
+            P2[0, 2] = cx_new; P2[1, 2] = cy_new
+            P2[0, 3] = P2[0, 3] * scale   # keep physical baseline Tx constant
+            # Recompute Q from modified P1/P2
+            Tx = -P2[0, 3] / f_new if f_new != 0 else 1.0
+            Q = np.array([
+                [1, 0, 0, -cx_new],
+                [0, 1, 0, -cy_new],
+                [0, 0, 0,  f_new],
+                [0, 0, -1.0 / Tx, 0.0],
+            ], dtype=np.float64)
+            roi1 = (0, 0, w, h)
+            roi2 = (0, 0, w, h)
+
         if lens == "fisheye":
             map1L, map2L = cv2.fisheye.initUndistortRectifyMap(
                 KL, DL_map, R1, P1, (w, h), cv2.CV_16SC2)
@@ -295,9 +349,11 @@ class StereoRectify(PluginBase):
             self._cam_left  = cam_left
             self._cam_right = cam_right
             self._alpha     = alpha
+            self._fov_out   = fov_out
 
         log(f"[StereoRectify] computed  L={cam_left} R={cam_right} "
-            f"lens={lens} alpha={alpha:.2f} roi1={tuple(roi1)} roi2={tuple(roi2)}")
+            f"lens={lens} alpha={alpha:.2f} fov_out={fov_out:.1f} "
+            f"roi1={tuple(roi1)} roi2={tuple(roi2)}")
         return {
             "ok":         True,
             "lens_type":  lens,
@@ -305,6 +361,7 @@ class StereoRectify(PluginBase):
             "roi1":       list(roi1),
             "roi2":       list(roi2),
             "alpha":      alpha,
+            "fov_out":    fov_out,
         }
 
     # ── Frame application ─────────────────────────────────────────────────────
@@ -341,6 +398,7 @@ class StereoRectify(PluginBase):
                 "roi2":           list(self._roi2),
                 "image_size":     list(self._img_size),
                 "alpha":          self._alpha,
+                "fov_out":        self._fov_out,
                 "calibrated_at":  datetime.now().isoformat(timespec="seconds"),
             }
             cam_L = self._cam_left
