@@ -1,0 +1,69 @@
+<!-- lensundistort/ui.html — LensUndistort plugin (1.1.0) -->
+<div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'&#9660;':'&#9654;'">
+  <span class="collapse-arrow">&#9654;</span>
+  <span>Lens Undistort</span>
+</div>
+<div class="collapsible-body">
+  <div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px;">
+
+    <!-- Calibration status -->
+    <div class="undistort-cal-status"
+         style="font-size:10px;color:#666;line-height:1.6;min-height:14px;"></div>
+
+    <div class="divider"></div>
+
+    <!-- Enable -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Enable</label>
+      <input type="checkbox" class="undistort-enable" onchange="undistortOnEnable(this)">
+    </div>
+
+    <!-- Output mode toggle -->
+    <div style="display:flex;gap:4px;">
+      <button class="undistort-mode-btn" data-mode="balance"
+              onclick="undistortOnModeSwitch(this,'balance')"
+              style="flex:1;padding:4px 0;font-size:11px;font-weight:600;border-radius:3px;cursor:pointer;background:#1a2a4a;color:#6ab0d4;border:1px solid #3a7bd5;">
+        Balance
+      </button>
+      <button class="undistort-mode-btn" data-mode="fov"
+              onclick="undistortOnModeSwitch(this,'fov')"
+              style="flex:1;padding:4px 0;font-size:11px;font-weight:600;border-radius:3px;cursor:pointer;background:#2a2a2a;color:#666;border:1px solid #444;">
+        FOV Out
+      </button>
+    </div>
+
+    <!-- Balance panel -->
+    <div class="undistort-balance-panel">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:11px;color:#aaa;flex:1;">Balance</span>
+        <span class="undistort-balance-label"
+              style="font-size:11px;color:#aaa;min-width:28px;text-align:right;">0.0</span>
+      </div>
+      <input type="range" class="undistort-balance-slider" min="0" max="1" step="0.05" value="0"
+             oninput="undistortOnBalanceInput(this)" onchange="undistortOnBalanceChange(this)">
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:#555;margin-top:-4px;">
+        <span>Crop edges</span><span>Full FOV</span>
+      </div>
+    </div>
+
+    <!-- FOV Out panel -->
+    <div class="undistort-fov-panel" style="display:none;flex-direction:column;gap:5px;">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:11px;color:#aaa;flex:1;">H-FOV Out (deg)</span>
+        <input type="number" class="undistort-fov-input" min="10" max="179" step="1" value="90"
+               onchange="undistortOnFovChange(this)"
+               style="width:52px;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 4px;font-size:11px;text-align:center;">
+      </div>
+      <div style="font-size:9px;color:#555;">Rectilinear output at specified field of view</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Reload -->
+    <button class="btn" onclick="undistortOnReload(this)"
+            style="background:#2a2a2a;color:#888;border:1px solid #444;">
+      Reload Calibration
+    </button>
+
+  </div>
+</div>
