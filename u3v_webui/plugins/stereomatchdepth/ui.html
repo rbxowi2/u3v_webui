@@ -1,0 +1,64 @@
+<!-- stereomatchdepth/ui.html — StereoMatch & Depth plugin (1.0.0) -->
+<div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'&#9660;':'&#9654;'">
+  <span class="collapse-arrow">&#9654;</span>
+  <span>Stereo Match &amp; Depth</span>
+</div>
+<div class="collapsible-body">
+  <div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px;">
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Left camera</label>
+      <select class="smd-cam-left" onchange="smdOnCamLeft(this)"
+              style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;max-width:160px;"></select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Right camera</label>
+      <select class="smd-cam-right" onchange="smdOnCamRight(this)"
+              style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;max-width:160px;"></select>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Display on</label>
+      <div style="display:flex;gap:4px;">
+        <button class="btn smd-side-L" onclick="smdSetSide(this,'L')"
+                style="font-size:11px;padding:2px 10px;border-radius:3px;cursor:pointer;">L</button>
+        <button class="btn smd-side-R" onclick="smdSetSide(this,'R')"
+                style="font-size:11px;padding:2px 10px;border-radius:3px;cursor:pointer;">R</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">View</label>
+      <div style="display:flex;gap:4px;">
+        <button class="btn smd-view-disparity" onclick="smdSetView(this,'disparity')"
+                style="font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;">Disp</button>
+        <button class="btn smd-view-depth" onclick="smdSetView(this,'depth')"
+                style="font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;">Depth</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Algorithm</label>
+      <div style="display:flex;gap:4px;">
+        <button class="btn smd-algo-bm" onclick="smdSetAlgo(this,'bm')"
+                style="font-size:11px;padding:2px 10px;border-radius:3px;cursor:pointer;">BM</button>
+        <button class="btn smd-algo-sgbm" onclick="smdSetAlgo(this,'sgbm')"
+                style="font-size:11px;padding:2px 10px;border-radius:3px;cursor:pointer;">SGBM</button>
+      </div>
+    </div>
+
+    <div class="smd-info-row" style="font-size:10px;color:#666;min-height:14px;line-height:1.5;"></div>
+
+    <div style="display:flex;gap:6px;">
+      <button class="btn smd-btn-enable" onclick="smdToggleEnable(this)"
+              style="flex:1;font-size:12px;font-weight:600;">Enable</button>
+      <button class="btn smd-btn-open" onclick="smdOpenModal(this)"
+              style="flex:1;background:#1a3a5c;color:#6ab0d4;border:1px solid #2a5a8c;font-size:12px;">Setting</button>
+    </div>
+
+    <button class="btn smd-btn-save-ply" onclick="smdSavePly(this)"
+            style="font-size:12px;background:#1a2a3a;color:#5a90c0;border:1px solid #2a5a8c;display:none;">Save PLY</button>
+
+  </div>
+</div>
