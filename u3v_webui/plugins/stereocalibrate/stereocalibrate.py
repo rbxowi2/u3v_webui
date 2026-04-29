@@ -1,4 +1,4 @@
-"""plugins/stereocalibrate/stereocalibrate.py — StereoCalibrate plugin (1.0.0)
+"""plugins/stereocalibrate/stereocalibrate.py — StereoCalibrate plugin (1.0.1)
 
 Stereo camera calibration using per-camera LensCalibrate JSON as intrinsics.
 Supports normal (pinhole) and fisheye lens models.
@@ -33,6 +33,7 @@ CALIB_DIR       = os.path.join(CAPTURE_DIR, "calibration")
 STEREO_DIR      = os.path.join(CAPTURE_DIR, "stereo")
 SAVE_MIN_SHOTS  = 5      # minimum accepted shots to save
 CAL_MIN_SHOTS   = 4      # minimum shots before running stereoCalibrate in worker
+MAX_CAL_SHOTS   = 30     # max shots kept; oldest dropped when exceeded
 AUTO_COOLDOWN   = 2.0    # seconds between auto-captures
 
 
@@ -97,7 +98,7 @@ class StereoCalibrate(PluginBase):
     def name(self) -> str:    return "StereoCalibrate"
 
     @property
-    def version(self) -> str: return "1.0.0"
+    def version(self) -> str: return "1.0.1"
 
     @property
     def description(self) -> str:
@@ -442,6 +443,7 @@ class StereoCalibrate(PluginBase):
 
             found_L, corners_L, fw_L, fh_L = self._detect_board(frame_L, cols, rows)
             found_R, corners_R, fw_R, fh_R = self._detect_board(frame_R, cols, rows)
+            frame_L = frame_R = None   # release frame buffers after board detection
 
             corners_norm_L = None
             corners_norm_R = None
@@ -534,9 +536,10 @@ class StereoCalibrate(PluginBase):
     def _calibration_worker(self, new_obj, new_img_L, new_img_R,
                              img_size, cx, cy, lens_type, KL, DL, KR, DR):
         with self._lock:
-            obj_pts   = list(self._shots_obj) + [new_obj]
-            img_pts_L = list(self._shots_img_L) + [new_img_L]
-            img_pts_R = list(self._shots_img_R) + [new_img_R]
+            # Slice directly to avoid copying the full history before trimming
+            obj_pts   = self._shots_obj[-(MAX_CAL_SHOTS - 1):]   + [new_obj]
+            img_pts_L = self._shots_img_L[-(MAX_CAL_SHOTS - 1):] + [new_img_L]
+            img_pts_R = self._shots_img_R[-(MAX_CAL_SHOTS - 1):] + [new_img_R]
             old_rms   = self._rms
             accepted  = self._accepted
 
@@ -549,6 +552,11 @@ class StereoCalibrate(PluginBase):
                 self._shots_img_L.append(new_img_L)
                 self._shots_img_R.append(new_img_R)
                 self._shot_centers.append((cx, cy))
+                if len(self._shots_obj) > MAX_CAL_SHOTS:
+                    del self._shots_obj[:-MAX_CAL_SHOTS]
+                    del self._shots_img_L[:-MAX_CAL_SHOTS]
+                    del self._shots_img_R[:-MAX_CAL_SHOTS]
+                    del self._shot_centers[:-MAX_CAL_SHOTS]
                 if self._img_size is None:
                     self._img_size = img_size
                 self._accepted += 1
@@ -593,6 +601,12 @@ class StereoCalibrate(PluginBase):
             self._shots_img_L.append(new_img_L)
             self._shots_img_R.append(new_img_R)
             self._shot_centers.append((cx, cy))
+            # Keep only the most recent MAX_CAL_SHOTS shots
+            if len(self._shots_obj) > MAX_CAL_SHOTS:
+                del self._shots_obj[:-MAX_CAL_SHOTS]
+                del self._shots_img_L[:-MAX_CAL_SHOTS]
+                del self._shots_img_R[:-MAX_CAL_SHOTS]
+                del self._shot_centers[:-MAX_CAL_SHOTS]
             if self._img_size is None:
                 self._img_size = img_size
             self._rms = rms
