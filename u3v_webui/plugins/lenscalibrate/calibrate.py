@@ -1,4 +1,4 @@
-"""plugins/lenscalibrate/calibrate.py — LensCalibrate plugin (2.3.0)
+"""plugins/lenscalibrate/calibrate.py — LensCalibrate plugin (2.3.2)
 
 Two-stage calibration for fisheye lenses:
   Stage 1 (fisheye, D fixed): cv2.fisheye.calibrate with D=[0,0,0,0] fixed.
@@ -104,7 +104,7 @@ class LensCalibrate(PluginBase):
     def name(self) -> str:    return "LensCalibrate"
 
     @property
-    def version(self) -> str: return "2.3.0"
+    def version(self) -> str: return "2.3.2"
 
     @property
     def description(self) -> str:
@@ -253,6 +253,7 @@ class LensCalibrate(PluginBase):
                              to=_req.sid)
                     return
                 stage1_K   = inst._K.copy()
+                stage1_D   = inst._D.copy() if inst._D is not None else None
                 stage1_rms = inst._rms
             inst._enter_stage2(stage1_K)
             sio.emit("calib_auto_status", {
@@ -262,6 +263,8 @@ class LensCalibrate(PluginBase):
                 "accepted": 0, "rejected": 0,
                 "shot_centers": [],
                 "reason": f"Stage 1 RMS {stage1_rms:.4f}",
+                "K": stage1_K.tolist(),
+                "D": stage1_D.flatten().tolist() if stage1_D is not None else None,
             })
 
         @sio.on("calib_skip_to_stage2")
@@ -278,6 +281,7 @@ class LensCalibrate(PluginBase):
                          to=_req.sid)
                 return
             K_saved = np.array(cal["camera_matrix"], dtype=np.float64)
+            D_saved = np.array(cal["dist_coeffs"],   dtype=np.float64)
             inst._enter_stage2(K_saved)
             sio.emit("calib_auto_status", {
                 "cam_id": cam_id, "action": "stage2",
@@ -285,6 +289,8 @@ class LensCalibrate(PluginBase):
                 "accepted": 0, "rejected": 0,
                 "shot_centers": [],
                 "reason": "Skipped Stage 1 — using saved K",
+                "K": K_saved.tolist(),
+                "D": D_saved.flatten().tolist(),
             })
 
         @sio.on("calib_toggle_auto")
@@ -522,6 +528,7 @@ class LensCalibrate(PluginBase):
             if found:
                 crit    = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
                 corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), crit)
+            gray = None   # release large frame buffer after detection
             if found:
                 corners_norm = [[float(c[0][0]) / fw, float(c[0][1]) / fh]
                                 for c in corners]
@@ -620,13 +627,13 @@ class LensCalibrate(PluginBase):
 
     def _calibration_worker(self, new_obj, new_img, img_size, cx, cy, lens_type):
         with self._lock:
-            all_obj  = list(self._shots_obj) + [new_obj]
-            all_img  = list(self._shots_img) + [new_img]
+            # Only take the most recent (MAX_CAL_SHOTS-1) stored shots + new one.
+            # Avoids copying the full history list before slicing it.
+            obj_pts  = self._shots_obj[-(MAX_CAL_SHOTS - 1):] + [new_obj]
+            img_pts  = self._shots_img[-(MAX_CAL_SHOTS - 1):] + [new_img]
             old_rms  = self._rms
             accepted = self._accepted
             stage    = self._stage
-        obj_pts = all_obj[-MAX_CAL_SHOTS:]
-        img_pts = all_img[-MAX_CAL_SHOTS:]
         w, h = img_size
         cal_type = lens_type
         fix_D    = (lens_type == "fisheye" and stage == 1)
@@ -664,6 +671,11 @@ class LensCalibrate(PluginBase):
             self._shots_obj.append(new_obj)
             self._shots_img.append(new_img)
             self._shot_centers.append((cx, cy))
+            # Trim to MAX_CAL_SHOTS so the lists never grow unboundedly
+            if len(self._shots_obj) > MAX_CAL_SHOTS:
+                del self._shots_obj[:-MAX_CAL_SHOTS]
+                del self._shots_img[:-MAX_CAL_SHOTS]
+                del self._shot_centers[:-MAX_CAL_SHOTS]
             if self._img_size is None:
                 self._img_size = img_size
             self._rms        = rms

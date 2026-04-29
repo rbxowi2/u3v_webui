@@ -620,7 +620,8 @@
     if (data.action === 'stage2') {
       _stage = 2;
       _shotCenters = []; _accepted = 0; _rejected = 0; _lastRms = null; _autoEnabled = false;
-      _matK = null; _matD = null;
+      // Pre-populate K/D with Stage 1 values so the HUD shows them before any Stage 2 shots
+      _preloadKD(data.K || null, data.D || null);
       _elAccepted.textContent   = '0';
       _elRejected.textContent   = '0';
       _elRms.textContent        = '—';
