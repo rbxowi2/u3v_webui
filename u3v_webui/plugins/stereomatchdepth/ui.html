@@ -1,4 +1,4 @@
-<!-- stereomatchdepth/ui.html — StereoMatch & Depth plugin (1.0.0) -->
+<!-- stereomatchdepth/ui.html — StereoMatch & Depth plugin (1.0.1) -->
 <div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'&#9660;':'&#9654;'">
   <span class="collapse-arrow">&#9654;</span>
   <span>Stereo Match &amp; Depth</span>
@@ -45,6 +45,18 @@
                 style="font-size:11px;padding:2px 10px;border-radius:3px;cursor:pointer;">BM</button>
         <button class="btn smd-algo-sgbm" onclick="smdSetAlgo(this,'sgbm')"
                 style="font-size:11px;padding:2px 10px;border-radius:3px;cursor:pointer;">SGBM</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Resolution</label>
+      <div style="display:flex;gap:4px;">
+        <button class="btn smd-scale-1" onclick="smdSetScale(this,1)"
+                style="font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;">1x</button>
+        <button class="btn smd-scale-2" onclick="smdSetScale(this,2)"
+                style="font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;">&#189;</button>
+        <button class="btn smd-scale-4" onclick="smdSetScale(this,4)"
+                style="font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;">&#188;</button>
       </div>
     </div>
 

@@ -1,4 +1,4 @@
-// stereomatchdepth/ui.js — StereoMatch & Depth plugin frontend (1.0.0)
+// stereomatchdepth/ui.js — StereoMatch & Depth plugin frontend (1.0.1)
 
 (function () {
   'use strict';
@@ -12,8 +12,9 @@
   let _camRight = '';
 
   // Session-only (not saved)
-  let _viewMode = 'disparity';   // 'disparity' | 'depth'
-  let _algo     = 'sgbm';        // 'bm' | 'sgbm'
+  let _viewMode  = 'disparity';   // 'disparity' | 'depth'
+  let _algo      = 'sgbm';        // 'bm' | 'sgbm'
+  let _procScale = 1;             // 1, 2, or 4
 
   // Saved numeric params
   let _nd  = 64;
@@ -684,6 +685,14 @@
     if (c) socket.emit('set_param', { cam_id: c, key: 'smd_algorithm', value: algo });
   };
 
+  window.smdSetScale = function (btnEl, scale) {
+    const block = _blk(btnEl);
+    const c = block ? block.dataset.cam : _camId;
+    _procScale = scale;
+    if (block) _updateScaleBtns(block, scale);
+    if (c) socket.emit('set_param', { cam_id: c, key: 'smd_proc_scale', value: scale });
+  };
+
   window.smdToggleEnable = function (btnEl) {
     const block = _blk(btnEl);
     if (!block) return;
@@ -722,6 +731,17 @@
       const b = block.querySelector(`.smd-algo-${v}`);
       if (!b) return;
       const on = v === algo;
+      b.style.background = on ? '#2a5a8c' : '#2a2a2a';
+      b.style.color       = on ? '#90ccf0' : '#888';
+      b.style.border      = on ? '1px solid #3a7abc' : '1px solid #444';
+    });
+  }
+
+  function _updateScaleBtns(block, scale) {
+    [1, 2, 4].forEach(s => {
+      const b = block.querySelector(`.smd-scale-${s}`);
+      if (!b) return;
+      const on = s === scale;
       b.style.background = on ? '#2a5a8c' : '#2a2a2a';
       b.style.color       = on ? '#90ccf0' : '#888';
       b.style.border      = on ? '1px solid #3a7abc' : '1px solid #444';
@@ -770,13 +790,15 @@
         sel.value = (cls === 'smd-cam-left' ? cs.smd_cam_left : cs.smd_cam_right) || cur || '';
       });
 
-      _updateSideBtns(block, cs.smd_display_side || 'L');
-      _updateViewBtns(block, cs.smd_view_mode    || 'disparity');
-      _updateAlgoBtns(block, cs.smd_algorithm    || 'sgbm');
+      _updateSideBtns(block,  cs.smd_display_side || 'L');
+      _updateViewBtns(block,  cs.smd_view_mode    || 'disparity');
+      _updateAlgoBtns(block,  cs.smd_algorithm    || 'sgbm');
+      _updateScaleBtns(block, cs.smd_proc_scale   || 1);
 
       // Keep module vars in sync with server state (for polling URL etc.)
-      if (cs.smd_view_mode) _viewMode = cs.smd_view_mode;
-      if (cs.smd_algorithm) _algo     = cs.smd_algorithm;
+      if (cs.smd_view_mode)  _viewMode  = cs.smd_view_mode;
+      if (cs.smd_algorithm)  _algo      = cs.smd_algorithm;
+      if (cs.smd_proc_scale) _procScale = cs.smd_proc_scale;
 
       const enableBtn = block.querySelector('.smd-btn-enable');
       if (enableBtn) {

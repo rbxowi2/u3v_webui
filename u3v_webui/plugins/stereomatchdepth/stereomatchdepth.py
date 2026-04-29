@@ -1,14 +1,20 @@
-"""plugins/stereomatchdepth/stereomatchdepth.py — StereoMatch & Depth plugin (1.0.1)
+"""plugins/stereomatchdepth/stereomatchdepth.py — StereoMatch & Depth plugin (1.0.2)
 
 Combined stereo disparity matching and depth mapping from rectified frames.
 
 Workflow:
-  1. Sidebar: select L/R cameras, set View (Disparity/Depth), Algorithm (BM/SGBM)
+  1. Sidebar: select L/R cameras, set View (Disparity/Depth), Algorithm (BM/SGBM),
+             Resolution (1x / ½ / ¼)
   2. Click Enable → loads saved params, builds remap maps
   3. Main window overlays disparity or depth map at native stereo resolution
   4. Modal: tune all numeric params, view stats, Save, Save PLY
-  5. Save → captures/match/<L>__<R>.json  (numeric params only; View/Algo NOT saved)
+  5. Save → captures/match/<L>__<R>.json  (numeric params only; View/Algo/Scale NOT saved)
   6. PLY  → captures/depth/<L>__<R>_<ts>.ply + browser download
+
+Resolution scaling (smd_proc_scale = 1 | 2 | 4, session-only):
+  Frames are resized to the full cal resolution before remap; remap maps are built
+  at 1/scale output size with P and Q matrices scaled accordingly.
+  Depth values are preserved — proof: Z = (f/s)·T/(d/s) = f·T/d.
 
 Lifecycle note:
   _enabled is ONLY cleared by manual Disable.
@@ -114,11 +120,14 @@ class StereoMatchDepth(PluginBase):
         self._ply_path:      Optional[str]        = None
 
         # Calibration cache
-        self._maps_cam: Optional[tuple]      = None
-        self._map_L:    Optional[tuple]      = None
-        self._map_R:    Optional[tuple]      = None
-        self._Q:        Optional[np.ndarray] = None
-        self._img_size: Optional[tuple]      = None
+        self._maps_cam:   Optional[tuple]      = None
+        self._map_L:      Optional[tuple]      = None
+        self._map_R:      Optional[tuple]      = None
+        self._Q:          Optional[np.ndarray] = None
+        self._img_size:   Optional[tuple]      = None  # remap output size (proc resolution)
+        self._cal_size:   Optional[tuple]      = None  # full cal resolution (pre-remap resize)
+        self._rect_raw:   Optional[dict]       = None  # raw rectification arrays (full res)
+        self._proc_scale: int                  = 1     # 1, 2, or 4 — session-only
 
         # File caches
         self._rectify_cache:       Optional[dict] = None
@@ -134,7 +143,7 @@ class StereoMatchDepth(PluginBase):
     @property
     def name(self)        -> str: return "StereoMatch & Depth"
     @property
-    def version(self)     -> str: return "1.0.1"
+    def version(self)     -> str: return "1.0.2"
     @property
     def description(self) -> str: return "Combined stereo disparity and depth map with PLY export"
 
@@ -174,6 +183,7 @@ class StereoMatchDepth(PluginBase):
             "smd_has_data":     cal is not None,
             "smd_saved_at":     cal.get("saved_at") if cal else None,
             "smd_has_ply":      has_ply,
+            "smd_proc_scale":   self._proc_scale,
         }
 
     # ── Params ────────────────────────────────────────────────────────────────
@@ -238,6 +248,12 @@ class StereoMatchDepth(PluginBase):
             return True
         if key == "smd_clip_max":
             with self._lock: self._clip_max = max(1.0, float(value))
+            return True
+        if key == "smd_proc_scale":
+            s = int(value) if int(value) in (1, 2, 4) else 1
+            with self._lock:
+                self._proc_scale = s
+            self._rebuild_scaled_maps()
             return True
         return False
 
@@ -410,6 +426,8 @@ class StereoMatchDepth(PluginBase):
                 map_R   = self._map_R
                 Q       = self._Q
                 isz     = self._img_size
+                cal_sz  = self._cal_size
+                scale   = self._proc_scale
 
             t0 = time.time()
             try:
@@ -423,11 +441,13 @@ class StereoMatchDepth(PluginBase):
                     time.sleep(_DT)
                     continue
 
-                if isz is not None:
-                    if (fL.shape[1], fL.shape[0]) != isz:
-                        fL = cv2.resize(fL, isz)
-                    if (fR.shape[1], fR.shape[0]) != isz:
-                        fR = cv2.resize(fR, isz)
+                # Resize to full cal resolution before remap; maps output at proc resolution.
+                resize_to = cal_sz if cal_sz is not None else isz
+                if resize_to is not None:
+                    if (fL.shape[1], fL.shape[0]) != resize_to:
+                        fL = cv2.resize(fL, resize_to)
+                    if (fR.shape[1], fR.shape[0]) != resize_to:
+                        fR = cv2.resize(fR, resize_to)
 
                 rL = cv2.remap(fL, map_L[0], map_L[1], cv2.INTER_LINEAR)
                 rR = cv2.remap(fR, map_R[0], map_R[1], cv2.INTER_LINEAR)
@@ -467,7 +487,7 @@ class StereoMatchDepth(PluginBase):
                 if now - self._diag_last_log >= 10.0:
                     self._diag_last_log = now
                     log(f"[StereoMatchDepth] diag  L={cam_L} R={cam_R} "
-                        f"frame={fL.shape} cal={isz} "
+                        f"cal={cal_sz} proc={isz} scale=1/{scale} "
                         f"disp_raw min={int(disp.min())} max={int(disp.max())} "
                         f"valid={valid_pct_d:.1f}%")
 
@@ -568,17 +588,6 @@ class StereoMatchDepth(PluginBase):
         DL = np.array(stereo["DL"], dtype=np.float64)
         DR = np.array(stereo["DR"], dtype=np.float64)
 
-        if lens == "fisheye":
-            m1L, m2L = cv2.fisheye.initUndistortRectifyMap(
-                KL, DL.flatten()[:4].reshape(4, 1), R1, P1, (w, h), cv2.CV_16SC2)
-            m1R, m2R = cv2.fisheye.initUndistortRectifyMap(
-                KR, DR.flatten()[:4].reshape(4, 1), R2, P2, (w, h), cv2.CV_16SC2)
-        else:
-            m1L, m2L = cv2.initUndistortRectifyMap(
-                KL, DL.reshape(1, -1), R1, P1, (w, h), cv2.CV_16SC2)
-            m1R, m2R = cv2.initUndistortRectifyMap(
-                KR, DR.reshape(1, -1), R2, P2, (w, h), cv2.CV_16SC2)
-
         saved = self._load_saved_params(cam_left, cam_right)
         with self._lock:
             if saved:
@@ -591,14 +600,60 @@ class StereoMatchDepth(PluginBase):
                 self._speckle_range    = saved.get("speckle_range",    self._speckle_range)
                 self._clip_min         = saved.get("clip_min",         self._clip_min)
                 self._clip_max         = saved.get("clip_max",         self._clip_max)
-            self._map_L    = (m1L, m2L)
-            self._map_R    = (m1R, m2R)
-            self._Q        = Q
-            self._img_size = (w, h)
+            self._rect_raw = {
+                "lens": lens, "wh": (w, h),
+                "R1": R1, "R2": R2, "P1": P1, "P2": P2, "Q": Q,
+                "KL": KL, "DL": DL, "KR": KR, "DR": DR,
+            }
             self._maps_cam = (cam_left, cam_right)
 
         log(f"[StereoMatchDepth] calibration loaded  L={cam_left} R={cam_right} "
             f"lens={lens} {w}×{h}")
+        self._rebuild_scaled_maps()
+
+    def _rebuild_scaled_maps(self):
+        """Rebuild remap maps and Q at the current proc_scale from stored raw cal data."""
+        with self._lock:
+            raw = self._rect_raw
+            s   = self._proc_scale
+        if raw is None:
+            return
+
+        lens    = raw["lens"]
+        w, h    = raw["wh"]
+        s_w     = max(1, w // s)
+        s_h     = max(1, h // s)
+        R1, R2  = raw["R1"], raw["R2"]
+        KL, DL  = raw["KL"], raw["DL"]
+        KR, DR  = raw["KR"], raw["DR"]
+
+        # Scale P: rows 0–1 (fx, fy, cx, cy, Tx) all divide by s; row 2 unchanged.
+        P1_s = raw["P1"].copy(); P1_s[:2, :] /= s
+        P2_s = raw["P2"].copy(); P2_s[:2, :] /= s
+
+        # Scale Q: column 3 holds pixel-space values (−cx, −cy, f, doffs).
+        # T_x (Q[3,2]) is in real-world units and stays unchanged.
+        Q_s = raw["Q"].copy(); Q_s[:, 3] /= s
+
+        if lens == "fisheye":
+            m1L, m2L = cv2.fisheye.initUndistortRectifyMap(
+                KL, DL.flatten()[:4].reshape(4, 1), R1, P1_s, (s_w, s_h), cv2.CV_16SC2)
+            m1R, m2R = cv2.fisheye.initUndistortRectifyMap(
+                KR, DR.flatten()[:4].reshape(4, 1), R2, P2_s, (s_w, s_h), cv2.CV_16SC2)
+        else:
+            m1L, m2L = cv2.initUndistortRectifyMap(
+                KL, DL.reshape(1, -1), R1, P1_s, (s_w, s_h), cv2.CV_16SC2)
+            m1R, m2R = cv2.initUndistortRectifyMap(
+                KR, DR.reshape(1, -1), R2, P2_s, (s_w, s_h), cv2.CV_16SC2)
+
+        with self._lock:
+            self._map_L    = (m1L, m2L)
+            self._map_R    = (m1R, m2R)
+            self._Q        = Q_s
+            self._cal_size = (w, h)
+            self._img_size = (s_w, s_h)
+
+        log(f"[StereoMatchDepth] maps rebuilt  scale=1/{s}  cal={w}×{h}  proc={s_w}×{s_h}")
 
     # ── Save / Generate ───────────────────────────────────────────────────────
 
