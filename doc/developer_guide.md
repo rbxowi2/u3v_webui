@@ -495,7 +495,7 @@ No changes to `state.py`, `app.py`, `streaming.py`, or the plugin manager are re
 - The raw channel is a **pull model**.  There is no push callback for raw data.  If a plugin must process every raw frame without skipping any, it must call `on_frame` for each pipeline tick and pull `latest_raw_frame` inside that callback.
 - Drivers with no meaningful native format (e.g. VirtualDriver generating synthetic BGR) should leave the default `None` implementation and not override these properties.
 
-### 4.6 Driver Auto-Discovery
+### 4.8 Driver Auto-Discovery
 
 `u3v_webui/drivers/__init__.py` scans `drivers/*.py` at import time, collects all `CameraDriver` subclasses, and populates:
 
