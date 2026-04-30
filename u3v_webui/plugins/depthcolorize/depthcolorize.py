@@ -1,33 +1,45 @@
-"""plugins/depthcolorize/depthcolorize.py — DepthColorize plugin (1.2.0)
+"""plugins/depthcolorize/depthcolorize.py — DepthColorize plugin (1.4.0)
 
 Display-only plugin: reads Z16 raw depth data from the driver's raw frame
 channel and renders it with a user-configurable depth range and colormap.
 Also exports point clouds as PLY (XYZ float32, optional RGB vertex colour).
 
-Vertex colour registration
---------------------------
-When dc_vertex_color is True a colour camera frame is sampled.
-dc_color_cam selects the source; "" = auto (same USB sysfs prefix, ":color"
-stream).  The nominal extrinsic is R=I, T=[dc_ext_tx, dc_ext_ty, dc_ext_tz]
-(mm).  SR300 nominal: tx=25 mm (colour camera 25 mm to the right of depth).
+Operating modes
+---------------
+Single-camera (no colour cam selected):
+  Intrinsics only.  Auto-load / save → captures/calibration/<safe_depth>.json
+  Format: {"camera_matrix": [[fx,0,cx],[0,fy,cy],[0,0,1]], "dist_coeffs": [...], ...}
+  Compatible with LensCalibrate output (other plugins can read it).
+
+Dual-camera (colour cam selected):
+  Intrinsics + extrinsics (R, T).
+  Auto-load / save → captures/stereo/<safe_depth>__<safe_color>.json
+  Format: {"KL": [[...]], "KR": [[...]], "T": [tx,ty,tz] mm, "R": [[...]], ...}
+  Compatible with StereoCalibrate output (reads KL/KR/R/T directly).
+
+On camera open: auto-loads depth intrinsics from calibration folder.
+On colour-cam selection: auto-loads from stereo folder (falls back to
+  calibration folder for colour intrinsics only).
 
 Parameters (session-only, not persisted to disk)
 ------------------------------------------------
 dc_enabled        bool    Plugin active (default False)
-dc_auto_range     bool    Auto-scale each frame; ignores clip_min/max (default True)
+dc_auto_range     bool    Auto-scale each frame (default True)
 dc_clip_min       float   Near clip mm, manual mode (default 200)
 dc_clip_max       float   Far clip mm, manual mode (default 1500)
 dc_depth_scale    float   mm per Z16 unit (default 0.125 — SR300)
 dc_colormap       int     OpenCV colormap 0-8 (default 0 = Jet)
-dc_fx/fy/cx/cy    float   Depth intrinsics (default 460/460/320/240 — SR300 nominal)
+dc_fx/fy/cx/cy    float   Depth intrinsics (default SR300 nominal)
 dc_vertex_color   bool    Include RGB vertex colour in PLY (default False)
-dc_color_cam      str     Colour source cam_id, "" = auto (default "")
-dc_color_fx/fy    float   Colour camera focal length (default 616 — SR300 nominal)
-dc_color_cx/cy    float   Colour camera principal point (default 320/240)
-dc_ext_tx/ty/tz   float   Extrinsic translation depth→colour in mm (default 25/0/0)
+dc_color_cam      str     Colour source cam_id, "" = auto
+dc_color_fx/fy    float   Colour camera focal length (default SR300 nominal)
+dc_color_cx/cy    float   Colour camera principal point (default SR300 nominal)
+dc_ext_tx/ty/tz   float   Extrinsic T depth→colour in mm (default 25/0/0)
+Internal: dc_ext_R (3×3 rotation, loaded from stereo cal, not user-editable)
 """
 
 import io
+import json
 import os
 import threading
 from datetime import datetime
@@ -41,6 +53,8 @@ from ...config import CAPTURE_DIR
 from ...utils import log
 
 _DEPTH_PLY_DIR = os.path.join(CAPTURE_DIR, "depth")
+_CALIB_DIR     = os.path.join(CAPTURE_DIR, "calibration")
+_STEREO_DIR    = os.path.join(CAPTURE_DIR, "stereo")
 
 _COLORMAPS = [
     cv2.COLORMAP_JET,
@@ -120,7 +134,8 @@ class DepthColorize(PluginBase):
         self._color_cx = 320.0
         self._color_cy = 240.0
 
-        # Extrinsics depth→colour, R=I, T in mm (SR300 nominal)
+        # Extrinsics depth→colour (R=I default, T in mm)
+        self._ext_R  = np.eye(3, dtype=np.float64)
         self._ext_tx = 25.0
         self._ext_ty =  0.0
         self._ext_tz =  0.0
@@ -134,7 +149,7 @@ class DepthColorize(PluginBase):
     @property
     def name(self)        -> str: return "DepthColorize"
     @property
-    def version(self)     -> str: return "1.2.0"
+    def version(self)     -> str: return "1.4.0"
     @property
     def description(self) -> str: return "Re-colorize Z16 depth + PLY export with optional vertex colour"
 
@@ -142,10 +157,28 @@ class DepthColorize(PluginBase):
 
     def on_load(self):
         os.makedirs(_DEPTH_PLY_DIR, exist_ok=True)
+        os.makedirs(_CALIB_DIR,     exist_ok=True)
+        os.makedirs(_STEREO_DIR,    exist_ok=True)
 
     def on_camera_open(self, cam_info: dict, cam_id: str = "", driver=None):
         self._cam_id = cam_id
         DepthColorize._instances[cam_id] = self
+        # Single-camera mode on open: auto-load depth intrinsics from calibration
+        intr = self._load_lens_intrinsics(cam_id)
+        if intr is not None:
+            fx, fy, cx, cy = intr
+            with self._lock:
+                self._fx = fx; self._fy = fy
+                self._cx = cx; self._cy = cy
+            log(f"[DepthColorize] Auto-loaded depth intrinsics for {cam_id}")
+            if self._sio:
+                self._sio.emit("dc_params_event", {
+                    "cam_id":   cam_id,
+                    "ok":       True,
+                    "source":   "lens_cal",
+                    "depth_fx": fx, "depth_fy": fy,
+                    "depth_cx": cx, "depth_cy": cy,
+                })
 
     def on_camera_close(self, cam_id: str = ""):
         DepthColorize._instances.pop(cam_id, None)
@@ -195,13 +228,12 @@ class DepthColorize(PluginBase):
         bgr[~valid] = 0
         return bgr
 
-    # ── PLY helpers ───────────────────────────────────────────────────────────
+    # ── Colour camera helpers ─────────────────────────────────────────────────
 
     def _auto_color_cam(self) -> str:
         """Find the matching colour stream for the current depth camera."""
         if self._state is None:
             return ""
-        # SR300 cam_id format: "<usb_path>:<stream>"  e.g. "2-1:depth"
         prefix = self._cam_id.rsplit(":", 1)[0] if ":" in self._cam_id else ""
         for cid in self._state.open_cam_ids:
             if cid == self._cam_id:
@@ -210,11 +242,157 @@ class DepthColorize(PluginBase):
                 continue
             if cid.endswith(":color") or "color" in cid.lower():
                 return cid
-        # Fallback: any other open camera
         for cid in self._state.open_cam_ids:
             if cid != self._cam_id:
                 return cid
         return ""
+
+    # ── Calibration persistence helpers ───────────────────────────────────────
+
+    @staticmethod
+    def _dc_safe(cam_id: str) -> str:
+        return cam_id.replace("/", "_").replace(":", "_").replace(" ", "_")
+
+    @staticmethod
+    def _stereo_params_path(depth_cam: str, color_cam: str) -> str:
+        d = DepthColorize._dc_safe(depth_cam)
+        c = DepthColorize._dc_safe(color_cam)
+        return os.path.join(_STEREO_DIR, f"{d}__{c}.json")
+
+    @staticmethod
+    def _load_lens_intrinsics(cam_id: str):
+        """Return (fx, fy, cx, cy) from LensCalibrate JSON in calibration folder, or None."""
+        if not cam_id:
+            return None
+        safe = DepthColorize._dc_safe(cam_id)
+        path = os.path.join(_CALIB_DIR, f"{safe}.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            K = data["camera_matrix"]   # [[fx,0,cx],[0,fy,cy],[0,0,1]]
+            return float(K[0][0]), float(K[1][1]), float(K[0][2]), float(K[1][2])
+        except Exception:
+            return None
+
+    def _load_stereo_params(self, depth_cam: str, color_cam: str) -> Optional[dict]:
+        """Load from stereo folder (StereoCalibrate or dc_stereo format). Returns dict or None."""
+        try:
+            with open(self._stereo_params_path(depth_cam, color_cam), encoding="utf-8") as f:
+                data = json.load(f)
+            if "KL" not in data or "KR" not in data or "T" not in data:
+                return None
+            return data
+        except Exception:
+            return None
+
+    def _auto_load_for_color_cam(self, color_cam: str):
+        """Auto-load params when colour cam is selected (dual-camera mode)."""
+        resolved = color_cam if color_cam else self._auto_color_cam()
+        if not resolved:
+            return
+
+        # Priority 1: stereo folder (full KL, KR, R, T)
+        params = self._load_stereo_params(self._cam_id, resolved)
+        if params:
+            KL = params["KL"]   # [[fx,0,cx],[0,fy,cy],[0,0,1]]
+            KR = params["KR"]
+            T  = params["T"]    # [tx, ty, tz] in mm
+            R  = params.get("R", [[1,0,0],[0,1,0],[0,0,1]])
+            with self._lock:
+                self._fx       = float(KL[0][0]); self._fy = float(KL[1][1])
+                self._cx       = float(KL[0][2]); self._cy = float(KL[1][2])
+                self._color_fx = float(KR[0][0]); self._color_fy = float(KR[1][1])
+                self._color_cx = float(KR[0][2]); self._color_cy = float(KR[1][2])
+                self._ext_tx   = float(T[0])
+                self._ext_ty   = float(T[1])
+                self._ext_tz   = float(T[2])
+                self._ext_R    = np.array(R, dtype=np.float64)
+                evt = {
+                    "cam_id":   self._cam_id, "ok": True, "source": "stereo_cal",
+                    "depth_fx": self._fx,   "depth_fy": self._fy,
+                    "depth_cx": self._cx,   "depth_cy": self._cy,
+                    "color_fx": self._color_fx, "color_fy": self._color_fy,
+                    "color_cx": self._color_cx, "color_cy": self._color_cy,
+                    "ext_tx":   self._ext_tx, "ext_ty": self._ext_ty, "ext_tz": self._ext_tz,
+                }
+            log(f"[DepthColorize] Auto-loaded stereo params for {self._cam_id}→{resolved}")
+            if self._sio:
+                self._sio.emit("dc_params_event", evt)
+            return
+
+        # Priority 2: calibration folder for colour cam intrinsics only
+        intr = self._load_lens_intrinsics(resolved)
+        if intr is not None:
+            cfx, cfy, ccx, ccy = intr
+            with self._lock:
+                self._color_fx = cfx; self._color_fy = cfy
+                self._color_cx = ccx; self._color_cy = ccy
+            log(f"[DepthColorize] Auto-loaded colour intrinsics for {resolved}")
+            if self._sio:
+                self._sio.emit("dc_params_event", {
+                    "cam_id":   self._cam_id, "ok": True, "source": "lens_cal",
+                    "color_fx": cfx, "color_fy": cfy,
+                    "color_cx": ccx, "color_cy": ccy,
+                })
+
+    def _save_dc_params(self) -> dict:
+        """Save current params.
+        Dual-camera (colour cam known): saves to stereo folder (KL/KR/R/T format).
+        Single-camera: saves to calibration folder (camera_matrix format).
+        """
+        with self._lock:
+            cam_depth  = self._cam_id
+            vertex_on  = self._vertex_color
+            cam_color  = (self._color_cam or self._auto_color_cam()) if vertex_on else ""
+            fx  = self._fx;  fy  = self._fy;  cx  = self._cx;  cy  = self._cy
+            cfx = self._color_fx; cfy = self._color_fy
+            ccx = self._color_cx; ccy = self._color_cy
+            tx  = self._ext_tx; ty = self._ext_ty; tz = self._ext_tz
+            R   = self._ext_R.tolist()
+
+        if not cam_depth:
+            return {"cam_id": cam_depth, "ok": False, "error": "no depth cam"}
+
+        ts = datetime.now().isoformat(timespec="seconds")
+
+        if cam_color:
+            # Dual-camera mode → stereo folder
+            data = {
+                "format_version": 1,
+                "type":      "dc_stereo",
+                "cam_left":  cam_depth,
+                "cam_right": cam_color,
+                "KL": [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+                "KR": [[cfx, 0.0, ccx], [0.0, cfy, ccy], [0.0, 0.0, 1.0]],
+                "T":  [tx, ty, tz],   # mm
+                "R":  R,
+                "saved_at": ts,
+            }
+            path = self._stereo_params_path(cam_depth, cam_color)
+            os.makedirs(_STEREO_DIR, exist_ok=True)
+        else:
+            # Single-camera mode → calibration folder (camera_matrix format)
+            data = {
+                "format_version": 1,
+                "type":          "dc_intrinsics",
+                "lens_type":     "normal",
+                "camera_matrix": [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+                "dist_coeffs":   [0.0, 0.0, 0.0, 0.0, 0.0],
+                "saved_at": ts,
+            }
+            path = os.path.join(_CALIB_DIR, f"{self._dc_safe(cam_depth)}.json")
+            os.makedirs(_CALIB_DIR, exist_ok=True)
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            log(f"[DepthColorize] Params saved: {path}")
+            return {"cam_id": cam_depth, "ok": True, "source": "saved",
+                    "filename": os.path.basename(path)}
+        except Exception as e:
+            return {"cam_id": cam_depth, "ok": False, "error": str(e)}
+
+    # ── PLY helpers ───────────────────────────────────────────────────────────
 
     def _generate_ply(self) -> dict:
         if self._state is None:
@@ -242,6 +420,7 @@ class DepthColorize(PluginBase):
             tx  = self._ext_tx / 1000.0   # mm → m
             ty  = self._ext_ty / 1000.0
             tz  = self._ext_tz / 1000.0
+            R_mat = self._ext_R.copy()
 
         # Depth range mask
         valid = raw > 0
@@ -273,7 +452,7 @@ class DepthColorize(PluginBase):
                 if color_frame is not None:
                     rgb = self._sample_color(
                         x_m[valid], y_m[valid], z_m[valid],
-                        tx, ty, tz,
+                        R_mat, tx, ty, tz,
                         cfx, cfy, ccx, ccy,
                         color_frame
                     )
@@ -284,15 +463,12 @@ class DepthColorize(PluginBase):
                 color_note = " (no colour camera found)"
 
         try:
-            if rgb is not None:
-                ply_bytes = _build_ply_xyz_rgb(pts, rgb)
-            else:
-                ply_bytes = _build_ply_xyz(pts)
+            ply_bytes = _build_ply_xyz_rgb(pts, rgb) if rgb is not None else _build_ply_xyz(pts)
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
         ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe  = self._cam_id.replace("/", "_").replace(":", "_").replace(" ", "_")
+        safe  = self._dc_safe(self._cam_id)
         fname = f"depth_{safe}_{ts}.ply"
         path  = os.path.join(_DEPTH_PLY_DIR, fname)
 
@@ -313,26 +489,26 @@ class DepthColorize(PluginBase):
                 "has_color": rgb is not None, "saved_at": ts}
 
     @staticmethod
-    def _sample_color(x_m, y_m, z_m, tx, ty, tz,
+    def _sample_color(x_m, y_m, z_m, R_mat, tx, ty, tz,
                       cfx, cfy, ccx, ccy, bgr_frame) -> np.ndarray:
-        """Back-project depth points into colour image; return RGB uint8 Nx3."""
+        """Back-project depth points into colour image; return RGB uint8 Nx3.
+        Applies full extrinsic: p_color = R @ p_depth + T  (all in metres).
+        """
         ch, cw = bgr_frame.shape[:2]
 
-        # Apply extrinsic (R=I, T)
-        xc = x_m + tx
-        yc = y_m + ty
-        zc = z_m + tz
+        pts = np.stack([x_m, y_m, z_m], axis=1).astype(np.float64)   # Nx3 m
+        T_vec = np.array([tx, ty, tz], dtype=np.float64)
+        pts_c = pts @ R_mat.T + T_vec                                  # Nx3 m
 
-        # Project onto colour image
+        xc = pts_c[:, 0]; yc = pts_c[:, 1]; zc = pts_c[:, 2]
         uc = (cfx * xc / zc + ccx).astype(np.float32)
         vc = (cfy * yc / zc + ccy).astype(np.float32)
 
         ui = np.clip(np.round(uc).astype(np.int32), 0, cw - 1)
         vi = np.clip(np.round(vc).astype(np.int32), 0, ch - 1)
 
-        bgr = bgr_frame[vi, ui]           # Nx3  BGR
-        rgb = bgr[:, ::-1].copy()         # → RGB
-        return rgb
+        bgr = bgr_frame[vi, ui]
+        return bgr[:, ::-1].copy()         # → RGB
 
     # ── Routes ────────────────────────────────────────────────────────────────
 
@@ -369,12 +545,39 @@ class DepthColorize(PluginBase):
                 return
             sio.emit("dc_event", inst._generate_ply(), to=_req.sid)
 
+        @sio.on("dc_save_params")
+        def _dc_save_params(data):
+            if not is_admin():
+                return
+            cam_id = data.get("cam_id", "")
+            inst   = DepthColorize._instances.get(cam_id)
+            if inst is None:
+                sio.emit("dc_params_event",
+                         {"cam_id": cam_id, "ok": False, "error": "DepthColorize not active"},
+                         to=_req.sid)
+                return
+            sio.emit("dc_params_event", inst._save_dc_params(), to=_req.sid)
+
     # ── Parameter dispatch ────────────────────────────────────────────────────
 
     def handle_set_param(self, key: str, value, driver) -> bool:
         _float  = lambda v, lo=None: max(lo, float(v)) if lo is not None else float(v)
         _bool   = lambda v: bool(v)
-        _str    = lambda v: str(v)
+
+        # dc_color_cam: switching mode triggers auto-load
+        if key == "dc_color_cam":
+            color_cam = str(value)
+            with self._lock:
+                self._color_cam = color_cam
+            self._auto_load_for_color_cam(color_cam)
+            return True
+
+        if key == "dc_colormap":
+            idx = int(value)
+            if 0 <= idx < len(_COLORMAPS):
+                with self._lock:
+                    self._colormap = _COLORMAPS[idx]
+            return True
 
         mapping = {
             "dc_enabled":     ("_enabled",     _bool),
@@ -387,7 +590,6 @@ class DepthColorize(PluginBase):
             "dc_cx":          ("_cx",          float),
             "dc_cy":          ("_cy",          float),
             "dc_vertex_color":("_vertex_color",_bool),
-            "dc_color_cam":   ("_color_cam",   _str),
             "dc_color_fx":    ("_color_fx",    lambda v: _float(v, 1.0)),
             "dc_color_fy":    ("_color_fy",    lambda v: _float(v, 1.0)),
             "dc_color_cx":    ("_color_cx",    float),
@@ -396,12 +598,6 @@ class DepthColorize(PluginBase):
             "dc_ext_ty":      ("_ext_ty",      float),
             "dc_ext_tz":      ("_ext_tz",      float),
         }
-        if key == "dc_colormap":
-            idx = int(value)
-            if 0 <= idx < len(_COLORMAPS):
-                with self._lock:
-                    self._colormap = _COLORMAPS[idx]
-            return True
         if key in mapping:
             attr, conv = mapping[key]
             with self._lock:
@@ -413,27 +609,27 @@ class DepthColorize(PluginBase):
 
     def get_state(self, cam_id: str = "") -> dict:
         with self._lock:
-            cm_idx = _COLORMAPS.index(self._colormap) if self._colormap in _COLORMAPS else 0
+            cm_idx   = _COLORMAPS.index(self._colormap) if self._colormap in _COLORMAPS else 0
             auto_cam = self._auto_color_cam() if not self._color_cam else ""
             return {
-                "dc_enabled":      self._enabled,
-                "dc_auto_range":   self._auto_range,
-                "dc_clip_min":     self._clip_min,
-                "dc_clip_max":     self._clip_max,
-                "dc_depth_scale":  self._depth_scale,
-                "dc_colormap":     cm_idx,
-                "dc_fx":           self._fx,
-                "dc_fy":           self._fy,
-                "dc_cx":           self._cx,
-                "dc_cy":           self._cy,
-                "dc_vertex_color": self._vertex_color,
-                "dc_color_cam":    self._color_cam,
+                "dc_enabled":        self._enabled,
+                "dc_auto_range":     self._auto_range,
+                "dc_clip_min":       self._clip_min,
+                "dc_clip_max":       self._clip_max,
+                "dc_depth_scale":    self._depth_scale,
+                "dc_colormap":       cm_idx,
+                "dc_fx":             self._fx,
+                "dc_fy":             self._fy,
+                "dc_cx":             self._cx,
+                "dc_cy":             self._cy,
+                "dc_vertex_color":   self._vertex_color,
+                "dc_color_cam":      self._color_cam,
                 "dc_color_cam_auto": auto_cam,
-                "dc_color_fx":     self._color_fx,
-                "dc_color_fy":     self._color_fy,
-                "dc_color_cx":     self._color_cx,
-                "dc_color_cy":     self._color_cy,
-                "dc_ext_tx":       self._ext_tx,
-                "dc_ext_ty":       self._ext_ty,
-                "dc_ext_tz":       self._ext_tz,
+                "dc_color_fx":       self._color_fx,
+                "dc_color_fy":       self._color_fy,
+                "dc_color_cx":       self._color_cx,
+                "dc_color_cy":       self._color_cy,
+                "dc_ext_tx":         self._ext_tx,
+                "dc_ext_ty":         self._ext_ty,
+                "dc_ext_tz":         self._ext_tz,
             }

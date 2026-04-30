@@ -1,4 +1,4 @@
-// depthcolorize/ui.js — DepthColorize plugin frontend (1.2.0)
+// depthcolorize/ui.js — DepthColorize plugin frontend (1.3.0)
 // Multi-camera safe: all DOM queries scoped to .plugin-ui-block.
 
 function _dcBlock(el) { return el.closest('.plugin-ui-block'); }
@@ -58,6 +58,44 @@ function dcOnVertexColor(el) {
 function dcOnColorCam(el) {
   socket.emit('set_param', { cam_id: _dcCamId(el), key: 'dc_color_cam', value: el.value });
 }
+
+// ── Params save ──────────────────────────────────────────────────────────
+
+function dcSaveParams(el) {
+  socket.emit('dc_save_params', { cam_id: _dcCamId(el) });
+}
+
+socket.on('dc_params_event', function (data) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="DepthColorize"]').forEach(function (block) {
+    if (block.dataset.cam !== data.cam_id) return;
+    const status = block.querySelector('.dc-status');
+    if (!data.ok) {
+      if (status) status.textContent = 'Error: ' + (data.error || 'unknown');
+      return;
+    }
+    const _setNum = function (sel, v) {
+      const el = block.querySelector(sel);
+      if (el && v !== undefined) el.value = parseFloat(v.toFixed(4));
+    };
+    _setNum('.dc-fx-input',  data.depth_fx);
+    _setNum('.dc-fy-input',  data.depth_fy);
+    _setNum('.dc-cx-input',  data.depth_cx);
+    _setNum('.dc-cy-input',  data.depth_cy);
+    _setNum('.dc-cfx-input', data.color_fx);
+    _setNum('.dc-cfy-input', data.color_fy);
+    _setNum('.dc-ccx-input', data.color_cx);
+    _setNum('.dc-ccy-input', data.color_cy);
+    _setNum('.dc-tx-input',  data.ext_tx);
+    _setNum('.dc-ty-input',  data.ext_ty);
+    _setNum('.dc-tz-input',  data.ext_tz);
+    if (status) {
+      if (data.source === 'saved')    status.textContent = 'Params saved: ' + (data.filename || '');
+      else if (data.source === 'stereo_cal') status.textContent = 'Params loaded (stereo_cal)';
+      else if (data.source === 'lens_cal')  status.textContent = 'Intrinsics loaded (lens_cal)';
+      else if (data.source)           status.textContent = 'Params loaded (' + data.source + ')';
+    }
+  });
+});
 
 // ── PLY export ───────────────────────────────────────────────────────────
 
