@@ -19,9 +19,12 @@ Multi-camera web streaming platform — access and control cameras via browser, 
 2. [Security Architecture](#2-security-architecture)
 3. [Application Framework](#3-application-framework)
 4. [Hardware Abstraction Layer (HAL)](#4-hardware-abstraction-layer-hal)
+   - 4.6 [SR300Driver — Intel RealSense SR300 / SR305](#46-sr300driver--intel-realsense-sr300--sr305)
+   - 4.7 [Raw Frame Channel](#47-raw-frame-channel)
 5. [Writing a Custom Driver](#5-writing-a-custom-driver)
 6. [Pipeline Architecture](#6-pipeline-architecture)
 7. [Writing a Plugin](#7-writing-a-plugin)
+   - 7.7 [Using the Raw Frame Channel](#77-using-the-raw-frame-channel)
 
 ---
 
@@ -344,8 +347,153 @@ DEFAULT_PARAMS: dict = {
 | `RPiDriver` | `rpi_driver.py` | CSI (Raspberry Pi, video mode) | libcamera |
 | `RPiImgDriver` | `rpi_img_driver.py` | CSI (Raspberry Pi, still mode) | picamer2/libcamera |
 | `VirtualDriver` | `virtual_driver.py` | Synthetic (test) | NumPy |
+| `SR300Driver` | `sr300_driver.py` | Intel RealSense SR300/SR305 via V4L2 | OpenCV + kernel UVC |
 
 > **Still-mode note:** `RPiImgDriver` controls FPS entirely via `time.sleep()` rather than sensor timing registers.  Its `query_native_modes()` returns `{"width": w, "height": h}` entries **without** an `"fps"` key; the UI omits the fps column for these modes.
+
+### 4.6 SR300Driver — Intel RealSense SR300 / SR305
+
+`SR300Driver` accesses SR300/SR305 hardware through the kernel `uvcvideo` V4L2 nodes without requiring the `pyrealsense2` SDK (which dropped SR300 support in version 2.50+).
+
+#### Device IDs and Virtual Cameras
+
+Each physical SR300/SR305 exposes up to three logical cameras:
+
+| `device_id` | Stream | Resolution | FPS | raw_frame_format |
+|-------------|--------|-----------|-----|-----------------|
+| `<usb_path>:depth` | 16-bit depth map | 640×480 | 6/15/30 | `Z16` |
+| `<usb_path>:infrared` | IR illuminator image | 640×480 | 6/15/30 | `Y10` |
+| `<usb_path>:color` | Colour camera | 640×480 | 30 | `None` |
+
+`usb_path` is the USB sysfs bus address (e.g. `2-1`).  Both depth and infrared streams share the same V4L2 device node and differ only by pixel format (`Z16` vs `Y10`).
+
+**Important:** depth and infrared **cannot be opened simultaneously** on the same physical device — the later-opened stream overrides the V4L2 pixel format on the shared node.
+
+#### Setup (Linux)
+
+No extra Python packages are required.  The driver uses `fcntl.ioctl` for V4L2 controls and `cv2.VideoCapture` with `CAP_V4L2` for acquisition.
+
+Grant user access to the V4L2 device nodes (one-time setup):
+
+```bash
+sudo bash -c 'cat > /etc/udev/rules.d/99-realsense-sr300.rules << EOF
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0aa5", MODE="0666", GROUP="video"
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b07", MODE="0666", GROUP="video"
+EOF'
+sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo usermod -aG video $USER
+```
+
+#### Supported Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `exposure` | µs (float) | Manual exposure; automatically disables auto-exposure |
+| `gain` | 0–255 (float) | Analogue gain |
+| `exposure_auto` | bool | `True` = aperture-priority auto, `False` = manual |
+| `rs_depth_colorizer` | int 0–8 | Colourmap index for the BGR depth preview stream |
+
+`rs_depth_colorizer` only affects the BGR preview frame sent to the pipeline — it does not alter the Z16 raw data.
+
+#### Depth Unit Conversion
+
+The Z16 raw values are in **device units**, not millimetres.  For SR300 the physical scale is approximately **0.125 mm / unit**, but the exact value varies per device and must be measured or read from the device calibration data.
+
+```python
+DEPTH_SCALE_MM = 0.125          # SR300 nominal; verify with calibration data
+depth_mm = z16_array * DEPTH_SCALE_MM
+```
+
+#### Caveats
+
+- The colour stream exposes no raw channel (`raw_frame_format` is `None`); OpenCV converts YUYV→BGR internally and the original YUYV bytes are discarded.
+- Opening depth and infrared simultaneously on the same device will cause the second stream to silently acquire frames in the wrong format.  Open only one at a time, or use a virtual camera host for cross-stream composition.
+- Exposure control writes `V4L2_CID_EXPOSURE_ABSOLUTE` in 100 µs units; the `exposure` parameter is always in µs regardless of driver.
+
+### 4.7 Raw Frame Channel
+
+The raw frame channel provides a side-channel for accessing a camera's native pixel data **before** any colour conversion applied by the driver.  It is independent of the two-phase pipeline — BGR frames continue flowing through the pipeline unchanged; raw data is pulled by plugins on demand.
+
+```
+Driver
+ ├─ on_frame(BGR uint8) ──→ [pipeline plugins] → [display plugins] → streaming
+ │
+ └─ latest_raw_frame      ← plugin pulls this directly inside on_frame
+    raw_frame_format
+```
+
+#### Interface (defined in `base.py`)
+
+Both properties have default implementations returning `None`, so existing drivers need no changes unless they wish to expose raw data.
+
+```python
+@property
+def latest_raw_frame(self) -> Optional[np.ndarray]:
+    """Raw frame in native pixel format, or None if not supported."""
+    return None
+
+@property
+def raw_frame_format(self) -> Optional[str]:
+    """Format string for latest_raw_frame, or None if not supported."""
+    return None
+```
+
+#### Format String Reference
+
+Format strings follow V4L2 fourcc / GenICam conventions.  Use the closest existing name; do not invent new names.
+
+| Format string | dtype | Shape | Description |
+|---------------|-------|-------|-------------|
+| `Z16` | `uint16` | `(H, W)` | 16-bit depth, device units |
+| `Y10` | `uint16` | `(H, W)` | 10-bit greyscale in 16-bit container (upper 6 bits = 0) |
+| `Y16` | `uint16` | `(H, W)` | 16-bit greyscale |
+| `MONO8` | `uint8` | `(H, W)` | 8-bit greyscale |
+| `MONO12` | `uint16` | `(H, W)` | 12-bit greyscale in 16-bit container |
+| `BayerRG8` | `uint8` | `(H, W)` | 8-bit Bayer RGGB |
+| `BayerRG12` | `uint16` | `(H, W)` | 12-bit Bayer RGGB in 16-bit container |
+| `YUYV` | `uint8` | `(H, W×2)` | Packed YUV 4:2:2 |
+
+#### Implementing Raw Data in a New Driver
+
+1. Add instance variables:
+
+```python
+self._frame_lock = threading.Lock()            # shared with latest_frame
+self._latest_raw: Optional[np.ndarray] = None
+self._raw_format: str = ""
+```
+
+2. Update both `_latest` and `_latest_raw` **atomically under the same lock** so that callers always see a consistent BGR + raw pair:
+
+```python
+with self._frame_lock:
+    self._latest     = bgr_frame
+    self._latest_raw = raw_frame     # e.g. uint16 depth map
+    self._raw_format = "Z16"
+```
+
+3. Override the two properties:
+
+```python
+@property
+def latest_raw_frame(self) -> Optional[np.ndarray]:
+    with self._frame_lock:
+        f = self._latest_raw
+        return f.copy() if f is not None else None   # copy — safe to hold
+
+@property
+def raw_frame_format(self) -> Optional[str]:
+    return self._raw_format or None
+```
+
+No changes to `state.py`, `app.py`, `streaming.py`, or the plugin manager are required.
+
+#### Notes and Caveats
+
+- `latest_raw_frame` returns a **copy** — safe to hold across frames.
+- `latest_raw_frame` and `latest_frame` are updated atomically under the same lock.  Calling both within a single `on_frame` invocation always returns data from the **same logical frame**.
+- The raw channel is a **pull model**.  There is no push callback for raw data.  If a plugin must process every raw frame without skipping any, it must call `on_frame` for each pipeline tick and pull `latest_raw_frame` inside that callback.
+- Drivers with no meaningful native format (e.g. VirtualDriver generating synthetic BGR) should leave the default `None` implementation and not override these properties.
 
 ### 4.6 Driver Auto-Discovery
 
@@ -984,7 +1132,64 @@ function myPluginToggle() {
 }
 ```
 
-### 7.7 HTTP Routes (Optional)
+### 7.7 Using the Raw Frame Channel
+
+Plugins access a camera's native raw data by pulling from the driver inside `on_frame`.  The channel is optional — always check `raw_frame_format` first and degrade gracefully when the driver does not support raw data.
+
+```python
+class MyDepthPlugin(PluginBase):
+
+    def __init__(self):
+        self._state = None   # injected by PluginManager
+
+    @property
+    def name(self): return "MyDepthPlugin"
+
+    def on_frame(self, frame: np.ndarray, hw_ts_ns: int, cam_id: str = ""):
+        # 'frame' is always BGR uint8 — use it for display as normal.
+        # Pull raw data from the driver if needed.
+
+        drv = self._state.get_driver(cam_id) if self._state else None
+        if drv is None:
+            return None
+
+        fmt = drv.raw_frame_format      # None when driver has no raw channel
+
+        if fmt == "Z16":
+            depth = drv.latest_raw_frame   # uint16 (H, W), device units
+            # e.g. convert to metres
+            depth_m = depth.astype(np.float32) * (0.125 / 1000.0)
+            # ... build point cloud, measure distance, etc.
+
+        elif fmt in ("Y10", "Y16"):
+            raw = drv.latest_raw_frame     # uint16 (H, W)
+            # ... high-bit-depth greyscale processing
+
+        elif fmt is None:
+            pass   # driver does not expose raw data; skip or show a warning
+
+        return None   # return None to leave the display frame unchanged
+```
+
+#### Pattern: Consistent BGR + Raw Pair
+
+Because `latest_frame` and `latest_raw_frame` are updated under the same driver lock, calling both inside a single `on_frame` invocation is safe — they always reflect the **same captured frame**:
+
+```python
+bgr   = drv.latest_frame       # BGR display frame for compositing
+raw   = drv.latest_raw_frame   # raw frame from the same tick
+fmt   = drv.raw_frame_format
+```
+
+#### Notes and Caveats
+
+- `latest_raw_frame` is a **copy**; holding it across multiple `on_frame` calls is safe.
+- The raw channel is **pull-only** — there is no separate callback.  Miss a frame by not calling `latest_raw_frame` inside `on_frame` and the data is gone (overwritten by the next frame).
+- Always guard against `drv is None` and `fmt is None`.  The driver can be `None` during camera open/close transitions, and many drivers do not implement raw data.
+- The raw format for a given driver/stream does not change at runtime; it is safe to cache `raw_frame_format` after the first non-`None` read.
+- **SR300 specifics:**  Only the `depth` and `infrared` streams expose a raw channel.  The `color` stream has `raw_frame_format == None` — OpenCV converts YUYV→BGR internally and the original bytes are discarded.  See §4.6 for SR300 stream and depth-unit details.
+
+### 7.8 HTTP Routes (Optional)
 
 If your plugin needs dedicated HTTP endpoints (e.g., file downloads):
 
@@ -1017,10 +1222,18 @@ Only add HTTP routes when SocketIO actions are insufficient. Prefer the `plugin_
 | `MultiView` | `MultiView` | 1.1.1 | source | pipeline | — | `multiview_layout`, `multiview_cam_1..4`, `multiview_src_1..4`, `multiview_res` |
 | `Anaglyph` | `Anaglyph` | 2.1.0 | source | pipeline | — | `anaglyph_left_cam`, `anaglyph_right_cam`, `anaglyph_left_source`, `anaglyph_right_source`, `anaglyph_color_mode`, `anaglyph_left_is_red`, `anaglyph_parallax` |
 | `MotionDetect` | `MotionDetect` | 1.0.3 | local | pipeline | `motdet_save_zones` | `motdet_enabled`, `motdet_var_threshold`, `motdet_min_pixel_count`, `motdet_cooldown_sec` |
+| `DepthColorize` | `DepthColorize` | 1.4.0 | raw+display | display | `dc_save_ply`, `dc_save_params` | `dc_enabled`, `dc_depth_scale`, `dc_fx/fy/cx/cy`, `dc_clip_min/max`, `dc_colormap`, `dc_vertex_color`, `dc_color_cam`, `dc_color_fx/fy/cx/cy`, `dc_ext_tx/ty/tz` |
 
 **Source plugins** (`MultiView`, `Anaglyph`) read frames from other cameras and return a synthesized composite that replaces the host camera's pipeline frame; any preceding pipeline processing on the host camera is discarded.  VirtualDriver cameras are typically used as the host.  `BasicRecord` automatically reallocates its ping-pong buffer to match the composite frame dimensions.  Both source plugins implement `held_cam_ids()` to declare their source camera dependencies.
 
 **MotionDetect** runs a background detection thread (MOG2, 10 Hz) on a downscaled copy of the pipeline frame.  When motion is detected in any configured zone the plugin saves a full-resolution JPEG to `captures/<YYYYMMDD>/motdet_<cam_safe>_<timestamp_us>.jpg`.  Each camera instance has independent zones (stored in `captures/motdet_zones/<cam_safe>_zones.json`), independent cooldown timers, and independent detection threads — they never interfere with each other even when triggered simultaneously.
+
+**DepthColorize** is a display-mode plugin that reads Z16 raw depth data from the driver's raw frame channel (requires `raw_frame_format == "Z16"`).  It renders a colourised depth preview and exports point clouds as binary PLY files.
+
+- **Single-camera mode** (vertex colour off): renders depth using depth intrinsics only.  Calibration params auto-loaded from and saved to `captures/calibration/<safe_cam>.json` (LensCalibrate format — `camera_matrix` key).
+- **Dual-camera mode** (vertex colour on, colour cam selected): projects depth points into the colour image frame using extrinsics (R, T) to assign RGB values per point.  Calibration params auto-loaded from and saved to `captures/stereo/<safe_depth>__<safe_color>.json` (StereoCalibrate format — `KL`, `KR`, `R`, `T` keys).  If a StereoCalibrate file already exists for the pair, it is read directly without requiring a separate save step.
+- PLY files are saved to `captures/depth/` and simultaneously offered as a browser download.
+- The plugin requires `self._state` injection (declare `self._state = None` in `__init__`) to access the driver and cross-camera colour frames.
 
 ---
 
