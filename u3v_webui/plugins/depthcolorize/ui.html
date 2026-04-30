@@ -1,0 +1,182 @@
+<!-- depthcolorize/ui.html — DepthColorize plugin (1.2.0) -->
+<div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'&#9660;':'&#9654;'">
+  <span class="collapse-arrow">&#9654;</span>
+  <span>Depth Colorize</span>
+</div>
+<div class="collapsible-body">
+  <div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px;">
+
+    <!-- Enable -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Enable</label>
+      <input type="checkbox" class="dc-enable" onchange="dcOnEnable(this)">
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Colormap -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Colormap</label>
+      <select class="dc-colormap" onchange="dcOnColormap(this)"
+              style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;">
+        <option value="0">Jet</option>
+        <option value="1">Bone</option>
+        <option value="2">Hot</option>
+        <option value="3">Pink</option>
+        <option value="4">Ocean</option>
+        <option value="5">Winter</option>
+        <option value="6">Autumn</option>
+        <option value="7">Rainbow</option>
+        <option value="8">Inferno</option>
+      </select>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Auto range -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Auto range</label>
+      <input type="checkbox" class="dc-auto-range" onchange="dcOnAutoRange(this)" checked>
+    </div>
+
+    <div class="dc-manual-range" style="display:none;flex-direction:column;gap:8px;">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:11px;color:#aaa;flex:1;">Near clip (mm)</span>
+        <span class="dc-min-label" style="font-size:11px;color:#aaa;min-width:36px;text-align:right;">200</span>
+      </div>
+      <input type="range" class="dc-min-slider" min="0" max="3000" step="10" value="200"
+             oninput="dcOnMinInput(this)" onchange="dcOnMinChange(this)">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:11px;color:#aaa;flex:1;">Far clip (mm)</span>
+        <span class="dc-max-label" style="font-size:11px;color:#aaa;min-width:36px;text-align:right;">1500</span>
+      </div>
+      <input type="range" class="dc-max-slider" min="100" max="5000" step="10" value="1500"
+             oninput="dcOnMaxInput(this)" onchange="dcOnMaxChange(this)">
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Depth scale -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Depth scale (mm/unit)</label>
+      <input type="number" class="dc-scale-input" min="0.001" max="10" step="0.001" value="0.125"
+             onchange="dcOnScaleChange(this)"
+             style="width:64px;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 6px;font-size:11px;text-align:right;">
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Depth intrinsics -->
+    <div style="font-size:10px;color:#666;">Depth intrinsics</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;">
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:18px;">fx</span>
+        <input type="number" class="dc-fx-input" min="1" step="0.1" value="460"
+               onchange="dcOnIntrinsic(this,'dc_fx')"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:18px;">fy</span>
+        <input type="number" class="dc-fy-input" min="1" step="0.1" value="460"
+               onchange="dcOnIntrinsic(this,'dc_fy')"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:18px;">cx</span>
+        <input type="number" class="dc-cx-input" min="0" step="0.5" value="320"
+               onchange="dcOnIntrinsic(this,'dc_cx')"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:18px;">cy</span>
+        <input type="number" class="dc-cy-input" min="0" step="0.5" value="240"
+               onchange="dcOnIntrinsic(this,'dc_cy')"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Vertex colour section -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;color:#aaa;flex:1;">Vertex colour (PLY)</label>
+      <input type="checkbox" class="dc-vertex-color" onchange="dcOnVertexColor(this)">
+    </div>
+
+    <div class="dc-color-section" style="display:none;flex-direction:column;gap:8px;">
+
+      <!-- Colour source camera -->
+      <div style="display:flex;align-items:center;gap:8px;">
+        <label style="font-size:11px;color:#aaa;flex:1;">Colour camera</label>
+        <select class="dc-color-cam" onchange="dcOnColorCam(this)"
+                style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 6px;font-size:11px;cursor:pointer;max-width:140px;">
+          <option value="">Auto</option>
+        </select>
+      </div>
+
+      <!-- Colour intrinsics -->
+      <div style="font-size:10px;color:#666;">Colour intrinsics</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;">
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:11px;color:#aaa;min-width:18px;">fx</span>
+          <input type="number" class="dc-cfx-input" min="1" step="0.1" value="616"
+                 onchange="dcOnIntrinsic(this,'dc_color_fx')"
+                 style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:11px;color:#aaa;min-width:18px;">fy</span>
+          <input type="number" class="dc-cfy-input" min="1" step="0.1" value="616"
+                 onchange="dcOnIntrinsic(this,'dc_color_fy')"
+                 style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:11px;color:#aaa;min-width:18px;">cx</span>
+          <input type="number" class="dc-ccx-input" min="0" step="0.5" value="320"
+                 onchange="dcOnIntrinsic(this,'dc_color_cx')"
+                 style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:11px;color:#aaa;min-width:18px;">cy</span>
+          <input type="number" class="dc-ccy-input" min="0" step="0.5" value="240"
+                 onchange="dcOnIntrinsic(this,'dc_color_cy')"
+                 style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+        </div>
+      </div>
+
+      <!-- Extrinsics (R=I, T only) -->
+      <div style="font-size:10px;color:#666;">Extrinsics T depth→colour (mm, R=I)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 6px;">
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:11px;color:#aaa;min-width:14px;">tx</span>
+          <input type="number" class="dc-tx-input" step="0.1" value="25"
+                 onchange="dcOnIntrinsic(this,'dc_ext_tx')"
+                 style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:11px;color:#aaa;min-width:14px;">ty</span>
+          <input type="number" class="dc-ty-input" step="0.1" value="0"
+                 onchange="dcOnIntrinsic(this,'dc_ext_ty')"
+                 style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:11px;color:#aaa;min-width:14px;">tz</span>
+          <input type="number" class="dc-tz-input" step="0.1" value="0"
+                 onchange="dcOnIntrinsic(this,'dc_ext_tz')"
+                 style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+        </div>
+      </div>
+
+    </div><!-- .dc-color-section -->
+
+    <div class="divider"></div>
+
+    <!-- Save PLY -->
+    <button class="btn dc-btn-ply" onclick="dcSavePly(this)"
+            style="font-size:12px;background:#1a2a3a;color:#5a90c0;border:1px solid #2a5a8c;">
+      Save PLY
+    </button>
+
+    <div class="dc-status" style="font-size:10px;color:#666;min-height:13px;"></div>
+
+  </div>
+</div>
