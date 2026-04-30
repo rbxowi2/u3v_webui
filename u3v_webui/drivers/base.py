@@ -135,6 +135,41 @@ class CameraDriver(threading.Thread, ABC):
     def is_running(self) -> bool:
         """True while the acquisition loop is active."""
 
+    # ── Raw frame channel ─────────────────────────────────────────────────────
+
+    @property
+    def latest_raw_frame(self) -> Optional[np.ndarray]:
+        """
+        Most recent frame in the driver's native pixel format, before any
+        conversion to BGR uint8.  Returns ``None`` if this driver does not
+        expose raw data.
+
+        Consumers must check ``raw_frame_format`` to know how to interpret
+        the array (dtype, shape, bit-depth).
+        """
+        return None
+
+    @property
+    def raw_frame_format(self) -> Optional[str]:
+        """
+        Format string for ``latest_raw_frame``.  ``None`` when raw data is
+        not available.
+
+        Standard format strings (mirrors V4L2 fourcc / GenICam convention):
+
+        =========  =================================================
+        ``Z16``    16-bit depth, device units (uint16, H×W)
+        ``Y10``    10-bit greyscale in 16-bit container (uint16, H×W)
+        ``Y16``    16-bit greyscale (uint16, H×W)
+        ``MONO8``  8-bit greyscale (uint8, H×W)
+        ``MONO12`` 12-bit greyscale in 16-bit container (uint16, H×W)
+        ``BayerRG8``   8-bit Bayer RGGB (uint8, H×W)
+        ``BayerRG12``  12-bit Bayer RGGB in 16-bit container (uint16, H×W)
+        ``YUYV``   Packed YUV 4:2:2 (uint8, H×W×2)
+        =========  =================================================
+        """
+        return None
+
     # ── Native mode query ──────────────────────────────────────────────────────
 
     def query_native_modes(self) -> list:
