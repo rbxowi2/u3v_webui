@@ -1,4 +1,4 @@
-"""plugins/stereomatchdepth/stereomatchdepth.py — StereoMatch & Depth plugin (1.0.2)
+"""plugins/stereomatchdepth/stereomatchdepth.py — StereoMatch & Depth plugin (1.1.0)
 
 Combined stereo disparity matching and depth mapping from rectified frames.
 
@@ -138,12 +138,18 @@ class StereoMatchDepth(PluginBase):
         # Diagnostic throttle
         self._diag_last_log: float = 0.0
 
+        # Z16 inject
+        self._inject_enabled: bool  = False
+        self._inject_target:  str   = ""
+        self._inject_scale:   float = 1.0
+        self._inject_last_ts: float = 0.0
+
     # ── Identity ──────────────────────────────────────────────────────────────
 
     @property
     def name(self)        -> str: return "StereoMatch & Depth"
     @property
-    def version(self)     -> str: return "1.0.2"
+    def version(self)     -> str: return "1.1.0"
     @property
     def description(self) -> str: return "Combined stereo disparity and depth map with PLY export"
 
@@ -183,7 +189,11 @@ class StereoMatchDepth(PluginBase):
             "smd_has_data":     cal is not None,
             "smd_saved_at":     cal.get("saved_at") if cal else None,
             "smd_has_ply":      has_ply,
-            "smd_proc_scale":   self._proc_scale,
+            "smd_proc_scale":       self._proc_scale,
+            "smd_inject_enabled":   self._inject_enabled,
+            "smd_inject_target":    self._inject_target,
+            "smd_inject_scale":     self._inject_scale,
+            "smd_inject_last_ts":   self._inject_last_ts,
         }
 
     # ── Params ────────────────────────────────────────────────────────────────
@@ -254,6 +264,20 @@ class StereoMatchDepth(PluginBase):
             with self._lock:
                 self._proc_scale = s
             self._rebuild_scaled_maps()
+            return True
+        if key == "smd_inject_enabled":
+            with self._lock:
+                self._inject_enabled = bool(value)
+            if not bool(value):
+                self._clear_inject()
+            return True
+        if key == "smd_inject_target":
+            with self._lock:
+                self._inject_target = str(value)
+            return True
+        if key == "smd_inject_scale":
+            with self._lock:
+                self._inject_scale = max(0.001, float(value))
             return True
         return False
 
@@ -525,6 +549,26 @@ class StereoMatchDepth(PluginBase):
                 depth_colored = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
                 depth_colored[~valid_depth] = 0
 
+                # ── Z16 inject ────────────────────────────────────────────────
+                with self._lock:
+                    inj_en  = self._inject_enabled
+                    inj_tgt = self._inject_target
+                    inj_sc  = self._inject_scale
+
+                if inj_en and inj_tgt and self._state:
+                    drv = self._state.get_driver(inj_tgt)
+                    if drv is not None:
+                        z16 = np.zeros(Z.shape, dtype=np.uint16)
+                        if valid_depth.any():
+                            z_mm = Z.astype(np.float32)
+                            z_mm[~valid_depth] = 0
+                            z_mm[valid_depth] = np.clip(
+                                z_mm[valid_depth] / max(inj_sc, 1e-9), 0, 65535)
+                            z16 = z_mm.astype(np.uint16)
+                        drv.inject_raw(z16, "Z16")
+                        with self._lock:
+                            self._inject_last_ts = time.time()
+
                 ok_d, buf_d = cv2.imencode(".jpg", disp_colored,  [cv2.IMWRITE_JPEG_QUALITY, 85])
                 ok_z, buf_z = cv2.imencode(".jpg", depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
@@ -539,13 +583,16 @@ class StereoMatchDepth(PluginBase):
 
                 if self._sio:
                     self._sio.emit("smd_stats", {
-                        "cam_id":      self._cam_id,
-                        "avg_disp":    round(avg_d,      1),
-                        "valid_pct_d": round(valid_pct_d, 1),
-                        "min_depth":   round(min_z,      0),
-                        "max_depth":   round(max_z,      0),
-                        "med_depth":   round(med_z,      0),
-                        "valid_pct_z": round(valid_pct_z, 1),
+                        "cam_id":         self._cam_id,
+                        "avg_disp":       round(avg_d,       1),
+                        "valid_pct_d":    round(valid_pct_d,  1),
+                        "min_depth":      round(min_z,        0),
+                        "max_depth":      round(max_z,        0),
+                        "med_depth":      round(med_z,        0),
+                        "valid_pct_z":    round(valid_pct_z,  1),
+                        "inject_enabled": inj_en,
+                        "inject_target":  inj_tgt,
+                        "inject_last_ts": self._inject_last_ts,
                     })
 
             except Exception as e:
@@ -555,7 +602,18 @@ class StereoMatchDepth(PluginBase):
             if slack > 0:
                 time.sleep(slack)
 
+        self._clear_inject()
         log(f"[StereoMatchDepth] worker stopped")
+
+    # ── Inject helpers ────────────────────────────────────────────────────────
+
+    def _clear_inject(self):
+        with self._lock:
+            tgt = self._inject_target
+        if tgt and self._state:
+            drv = self._state.get_driver(tgt)
+            if drv is not None:
+                drv.clear_injected_raw()
 
     # ── Calibration ───────────────────────────────────────────────────────────
 

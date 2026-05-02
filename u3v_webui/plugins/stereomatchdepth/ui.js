@@ -1,4 +1,4 @@
-// stereomatchdepth/ui.js — StereoMatch & Depth plugin frontend (1.0.1)
+// stereomatchdepth/ui.js — StereoMatch & Depth plugin frontend (1.1.0)
 
 (function () {
   'use strict';
@@ -26,6 +26,11 @@
   let _sr  = 2;
   let _clipMin = 200;
   let _clipMax = 5000;
+
+  // Inject state
+  let _injectEnabled = false;
+  let _injectTarget  = '';
+  let _injectScale   = 1.0;
 
   let _running = false;
 
@@ -635,7 +640,6 @@
   });
 
   socket.on('smd_stats', (data) => {
-    if (data.cam_id !== _camId) return;
     if (_elDAvg) { _elDAvg.textContent = `  平均 ${data.avg_disp} px`; _elDAvg.style.color = '#aaa'; }
     if (_elDVld) {
       _elDVld.textContent = `  有效 ${data.valid_pct_d}%`;
@@ -648,6 +652,20 @@
     if (_elZMin) _elZMin.textContent = `  最近 ${data.min_depth} mm`;
     if (_elZMed) _elZMed.textContent = `  中位 ${data.med_depth} mm`;
     if (_elZMax) _elZMax.textContent = `  最遠 ${data.max_depth} mm`;
+
+    // Update inject status in all matching sidebar blocks
+    document.querySelectorAll('.plugin-ui-block[data-plugin="StereoMatch & Depth"]').forEach(block => {
+      if (block.dataset.cam !== data.cam_id) return;
+      const statusEl = block.querySelector('.smd-inject-status');
+      if (!statusEl) return;
+      if (data.inject_enabled && data.inject_target) {
+        const age = data.inject_last_ts > 0 ? Math.round((Date.now() / 1000) - data.inject_last_ts) : null;
+        statusEl.textContent = age !== null ? `→ ${data.inject_target}  ${age}s ago` : `→ ${data.inject_target}`;
+        statusEl.style.color = (age !== null && age < 3) ? '#c07ad4' : '#666';
+      } else {
+        statusEl.textContent = '';
+      }
+    });
   });
 
   // ── Sidebar param handlers ────────────────────────────────────────────────
@@ -812,6 +830,29 @@
       const plyBtn = block.querySelector('.smd-btn-save-ply');
       if (plyBtn) plyBtn.style.display = cs.smd_enabled ? '' : 'none';
 
+      // Z16 inject section — show only when enabled
+      const injectSection = block.querySelector('.smd-inject-section');
+      if (injectSection) injectSection.style.display = cs.smd_enabled ? 'flex' : 'none';
+
+      const injectTargetSel = block.querySelector('.smd-inject-target');
+      if (injectTargetSel) {
+        const curTgt = injectTargetSel.value;
+        injectTargetSel.innerHTML = '<option value="">— none —</option>';
+        camIds.forEach(id => {
+          const opt = document.createElement('option');
+          opt.value = id; opt.textContent = id;
+          injectTargetSel.appendChild(opt);
+        });
+        injectTargetSel.value = cs.smd_inject_target || curTgt || '';
+      }
+
+      const injectScaleIn = block.querySelector('.smd-inject-scale');
+      if (injectScaleIn && cs.smd_inject_scale !== undefined)
+        injectScaleIn.value = cs.smd_inject_scale;
+
+      const injectBtn = block.querySelector('.smd-btn-inject');
+      if (injectBtn) _setInjectBtn(injectBtn, !!cs.smd_inject_enabled);
+
       const infoRow = block.querySelector('.smd-info-row');
       if (infoRow) {
         const L = block.querySelector('.smd-cam-left')?.value  || cs.smd_cam_left  || '';
@@ -836,5 +877,39 @@
 
   socket.on('state', _applySmdState);
   window.addEventListener('plugin-state-update', e => _applySmdState(e.detail));
+
+  // ── Z16 Inject sidebar handlers ───────────────────────────────────────────
+  function _setInjectBtn(btn, enabled) {
+    btn.dataset.inject   = String(enabled);
+    btn.textContent      = enabled ? 'Stop Inject' : 'Inject';
+    btn.style.background = enabled ? '#2a1a3a' : '#2a2a2a';
+    btn.style.color      = enabled ? '#c07ad4' : '#888';
+    btn.style.border     = enabled ? '1px solid #6a3a8a' : '1px solid #444';
+  }
+
+  window.smdSetInjectTarget = function (el) {
+    const block = _blk(el);
+    const c = block ? block.dataset.cam : '';
+    _injectTarget = el.value;
+    if (c) socket.emit('set_param', { cam_id: c, key: 'smd_inject_target', value: el.value });
+  };
+
+  window.smdSetInjectScale = function (el) {
+    const block = _blk(el);
+    const c = block ? block.dataset.cam : '';
+    _injectScale = parseFloat(el.value) || 1.0;
+    if (c) socket.emit('set_param', { cam_id: c, key: 'smd_inject_scale', value: _injectScale });
+  };
+
+  window.smdToggleInject = function (btnEl) {
+    const block = _blk(btnEl);
+    if (!block) return;
+    const c = block.dataset.cam;
+    if (!c) return;
+    const next = !(btnEl.dataset.inject === 'true');
+    _injectEnabled = next;
+    socket.emit('set_param', { cam_id: c, key: 'smd_inject_enabled', value: next });
+    _setInjectBtn(btnEl, next);
+  };
 
 }());
