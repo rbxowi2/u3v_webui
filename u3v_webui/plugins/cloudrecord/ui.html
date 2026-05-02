@@ -1,0 +1,248 @@
+<!-- cloudrecord/ui.html — RTAB-Map_record plugin (1.3.2) -->
+<div class="collapsible-hdr" onclick="var b=this.nextElementSibling,o=b.classList.toggle('is-open');this.querySelector('.collapse-arrow').textContent=o?'&#9660;':'&#9654;'">
+  <span class="collapse-arrow">&#9654;</span>
+  <span>RTAB-Map Record</span>
+</div>
+<div class="collapsible-body">
+<div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px;">
+
+  <!-- Status bar -->
+  <div style="background:#1a1a1a;border:1px solid #333;border-radius:3px;padding:6px 8px;display:flex;flex-direction:column;gap:3px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span class="cr-state-label" style="font-size:11px;color:#7ec8e3;font-weight:bold;">Idle</span>
+      <span class="cr-step-label" style="font-size:10px;color:#888;"></span>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span class="cr-frame-count" style="font-size:10px;color:#888;">0 frames</span>
+      <span class="cr-session-name" style="font-size:10px;color:#555;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;"></span>
+    </div>
+  </div>
+
+  <!-- Start / Stop -->
+  <button class="btn cr-btn-toggle" onclick="crToggleScan(this)"
+          data-scanning="0"
+          style="font-size:12px;font-weight:bold;background:#1a2a1a;color:#5a9a5a;border:1px solid #2a6a2a;">
+    Start
+  </button>
+
+  <div class="divider"></div>
+
+  <!-- Capture rate -->
+  <div style="font-size:10px;color:#666;">Capture Rate</div>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span style="font-size:11px;color:#aaa;flex:1;">FPS</span>
+    <input type="number" class="cr-capture-fps" min="0.1" max="10" step="0.1" value="1"
+           onchange="crParam(this,'cr_capture_fps',parseFloat)"
+           style="width:60px;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 6px;font-size:11px;text-align:right;">
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Depth range filter -->
+  <div style="display:flex;align-items:center;gap:8px;">
+    <label style="font-size:11px;color:#aaa;flex:1;">Depth range</label>
+    <select class="cr-depth-range-mode" onchange="crOnDepthRangeMode(this)"
+            style="background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 6px;font-size:11px;">
+      <option value="auto">Auto</option>
+      <option value="manual">Manual</option>
+    </select>
+  </div>
+  <div class="cr-manual-range" style="display:none;flex-direction:column;gap:6px;">
+    <div style="display:flex;align-items:center;gap:6px;">
+      <span style="font-size:11px;color:#aaa;flex:1;">Near clip (mm)</span>
+      <span class="cr-min-label" style="font-size:11px;color:#aaa;min-width:36px;text-align:right;">100</span>
+    </div>
+    <input type="range" class="cr-min-slider" min="0" max="3000" step="10" value="100"
+           oninput="crOnMinInput(this)" onchange="crOnMinChange(this)">
+    <div style="display:flex;align-items:center;gap:6px;">
+      <span style="font-size:11px;color:#aaa;flex:1;">Far clip (mm)</span>
+      <span class="cr-max-label" style="font-size:11px;color:#aaa;min-width:36px;text-align:right;">5000</span>
+    </div>
+    <input type="range" class="cr-max-slider" min="100" max="10000" step="100" value="5000"
+           oninput="crOnMaxInput(this)" onchange="crOnMaxChange(this)">
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Depth intrinsics -->
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span style="font-size:11px;color:#aaa;flex:1;">Depth scale (mm/unit)</span>
+    <input type="number" class="cr-depth-scale" min="0.001" max="10" step="0.001" value="0.125"
+           onchange="crParam(this,'cr_depth_scale',parseFloat)"
+           style="width:64px;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 6px;font-size:11px;text-align:right;">
+  </div>
+  <div style="font-size:10px;color:#666;">Depth intrinsics <span class="cr-intr-source" style="color:#555;"></span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;">
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">fx</span>
+      <input type="number" class="cr-fx" min="1" step="0.1" value="460"
+             onchange="crParam(this,'cr_fx',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">fy</span>
+      <input type="number" class="cr-fy" min="1" step="0.1" value="460"
+             onchange="crParam(this,'cr_fy',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">cx</span>
+      <input type="number" class="cr-cx" step="0.5" value="320"
+             onchange="crParam(this,'cr_cx',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">cy</span>
+      <input type="number" class="cr-cy" step="0.5" value="240"
+             onchange="crParam(this,'cr_cy',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Colour camera (mandatory) -->
+  <div style="font-size:10px;color:#666;">Colour Camera <span style="color:#c85a5a;">*</span></div>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <select class="cr-color-cam"
+            onchange="crParam(this,'cr_color_cam',function(v){return v.value;})"
+            style="flex:1;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:3px 6px;font-size:11px;">
+      <option value="">-- select --</option>
+    </select>
+  </div>
+  <!-- Colour camera intrinsics -->
+  <div style="font-size:10px;color:#666;">Colour intrinsics <span class="cr-color-intr-source" style="color:#555;"></span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;">
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">fx</span>
+      <input type="number" class="cr-color-fx" min="1" step="0.1" value="616"
+             onchange="crParam(this,'cr_color_fx',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">fy</span>
+      <input type="number" class="cr-color-fy" min="1" step="0.1" value="616"
+             onchange="crParam(this,'cr_color_fy',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">cx</span>
+      <input type="number" class="cr-color-cx" step="0.5" value="320"
+             onchange="crParam(this,'cr_color_cx',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:#aaa;min-width:18px;">cy</span>
+      <input type="number" class="cr-color-cy" step="0.5" value="240"
+             onchange="crParam(this,'cr_color_cy',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+  </div>
+  <!-- Extrinsics translation -->
+  <div style="font-size:10px;color:#666;">Extrinsics translation (mm)</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 6px;">
+    <div style="display:flex;align-items:center;gap:3px;">
+      <span style="font-size:11px;color:#aaa;min-width:14px;">tx</span>
+      <input type="number" class="cr-ext-tx" step="0.1" value="25"
+             onchange="crParam(this,'cr_ext_tx',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 3px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:3px;">
+      <span style="font-size:11px;color:#aaa;min-width:14px;">ty</span>
+      <input type="number" class="cr-ext-ty" step="0.1" value="0"
+             onchange="crParam(this,'cr_ext_ty',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 3px;font-size:11px;">
+    </div>
+    <div style="display:flex;align-items:center;gap:3px;">
+      <span style="font-size:11px;color:#aaa;min-width:14px;">tz</span>
+      <input type="number" class="cr-ext-tz" step="0.1" value="0"
+             onchange="crParam(this,'cr_ext_tz',parseFloat)"
+             style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 3px;font-size:11px;">
+    </div>
+  </div>
+
+  <!-- Save intrinsics / extrinsics -->
+  <button class="btn" onclick="crSaveParams(this)"
+          style="font-size:11px;background:#1a1a2a;color:#7a8ac0;border:1px solid #3a3a8c;">
+    Save Parameters
+  </button>
+
+  <!-- Servo section — UI hidden, code kept for future use -->
+  <div class="cr-servo-section" style="display:none;flex-direction:column;gap:6px;">
+    <div style="font-size:10px;color:#666;">GRBL Servo</div>
+    <div style="display:flex;gap:6px;">
+      <input type="text" class="cr-servo-ip" value="192.168.1.100" placeholder="IP"
+             style="flex:2;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 6px;font-size:11px;">
+      <input type="number" class="cr-servo-port" value="23" min="1" max="65535"
+             style="flex:1;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+    </div>
+    <div style="display:flex;gap:6px;">
+      <button class="btn cr-btn-connect" onclick="crServoConnect(this)"
+              style="flex:1;font-size:11px;background:#1a2a1a;color:#5a9a5a;border:1px solid #2a6a2a;">Connect</button>
+      <button class="btn cr-btn-disconnect" onclick="crServoDisconnect(this)"
+              style="flex:1;font-size:11px;background:#2a1a1a;color:#9a5a5a;border:1px solid #6a2a2a;">Disconnect</button>
+    </div>
+    <div class="cr-servo-conn-status" style="font-size:10px;color:#888;">Not connected</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;">
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:28px;">Axis</span>
+        <input type="text" class="cr-servo-axis" value="A" maxlength="1"
+               onchange="crParam(this,'cr_servo_axis',function(v){return v.value;})"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:28px;">Feed</span>
+        <input type="number" class="cr-servo-feed" value="500" min="1"
+               onchange="crParam(this,'cr_servo_feed',parseFloat)"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:28px;">Dwell</span>
+        <input type="number" class="cr-servo-dwell" value="0.5" min="0" step="0.1"
+               onchange="crParam(this,'cr_servo_dwell',parseFloat)"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:11px;color:#aaa;min-width:28px;">Timeout</span>
+        <input type="number" class="cr-servo-timeout" value="10" min="1"
+               onchange="crParam(this,'cr_servo_timeout',parseFloat)"
+               style="flex:1;min-width:0;background:#2a2a2a;color:#d4d4d4;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;">
+      </div>
+    </div>
+    <div style="font-size:10px;color:#666;">Comm log</div>
+    <div class="cr-servo-log"
+         style="background:#0e0e0e;border:1px solid #333;border-radius:3px;padding:4px 6px;
+                font-family:monospace;font-size:10px;height:120px;overflow-y:auto;
+                display:flex;flex-direction:column;gap:1px;"></div>
+  </div>
+
+  <!-- Elevation change prompt -->
+  <div class="cr-elevation-prompt" style="display:none;flex-direction:column;gap:6px;
+       background:#1a1a0a;border:1px solid #6a6a2a;border-radius:4px;padding:8px;">
+    <div style="font-size:11px;color:#c8c85a;">Elevation change required</div>
+    <div class="cr-elevation-msg" style="font-size:11px;color:#aaa;"></div>
+    <button class="btn" onclick="crConfirmElevation(this)"
+            style="font-size:12px;background:#1a2a1a;color:#5a9a5a;border:1px solid #2a6a2a;">
+      Confirm &amp; Continue
+    </button>
+  </div>
+
+  <!-- Error prompt -->
+  <div class="cr-error-prompt" style="display:none;flex-direction:column;gap:6px;
+       background:#1a0a0a;border:1px solid #6a2a2a;border-radius:4px;padding:8px;">
+    <div style="font-size:11px;color:#c85a5a;">Error</div>
+    <div class="cr-error-msg" style="font-size:10px;color:#aaa;word-break:break-all;"></div>
+    <div style="display:flex;gap:4px;">
+      <button class="btn" onclick="crErrorAction(this,'retry')"
+              style="flex:1;font-size:11px;background:#1a2a1a;color:#5a9a5a;border:1px solid #2a6a2a;">Retry</button>
+      <button class="btn" onclick="crErrorAction(this,'skip')"
+              style="flex:1;font-size:11px;background:#1a1a2a;color:#7a8ac0;border:1px solid #3a3a8c;">Skip</button>
+      <button class="btn" onclick="crErrorAction(this,'abort')"
+              style="flex:1;font-size:11px;background:#2a1a1a;color:#9a5a5a;border:1px solid #6a2a2a;">Abort</button>
+    </div>
+  </div>
+
+  <div class="cr-msg" style="font-size:10px;color:#c8a05a;min-height:13px;"></div>
+
+</div>
+</div>
