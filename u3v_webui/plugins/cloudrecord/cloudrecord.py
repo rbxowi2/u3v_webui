@@ -154,7 +154,7 @@ class CloudRecord(PluginBase):
     @property
     def name(self)        -> str: return "RTAB-Map_record"
     @property
-    def version(self)     -> str: return "1.5.0"
+    def version(self)     -> str: return "1.5.1"
     @property
     def description(self) -> str: return "RTAB-Map RGB-D dataset recorder with depth filter and GRBL turntable support"
 
@@ -222,7 +222,7 @@ class CloudRecord(PluginBase):
         if not params:
             return
         KL = params["KL"]; KR = params["KR"]
-        T  = params["T"]
+        T  = np.array(params["T"], dtype=np.float64).flatten()   # (3,1) or (3,) → (3,)
         R  = params.get("R", [[1,0,0],[0,1,0],[0,0,1]])
         with self._lock:
             self._fx       = float(KL[0][0]); self._fy = float(KL[1][1])
