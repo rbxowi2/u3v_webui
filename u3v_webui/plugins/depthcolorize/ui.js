@@ -1,4 +1,4 @@
-// depthcolorize/ui.js — DepthColorize plugin frontend (1.3.0)
+// depthcolorize/ui.js — DepthColorize plugin frontend (1.5.0)
 // Multi-camera safe: all DOM queries scoped to .plugin-ui-block.
 
 function _dcBlock(el) { return el.closest('.plugin-ui-block'); }
@@ -59,6 +59,32 @@ function dcOnColorCam(el) {
   socket.emit('set_param', { cam_id: _dcCamId(el), key: 'dc_color_cam', value: el.value });
 }
 
+function dcSetColorCamSource(el, src) {
+  socket.emit('set_param', { cam_id: _dcCamId(el), key: 'dc_color_cam_source', value: src });
+  _dcUpdateColorSrcBtns(_dcBlock(el), src);
+}
+function _dcUpdateColorSrcBtns(block, src) {
+  var pipeline = block.querySelector('.dc-src-pipeline');
+  var display  = block.querySelector('.dc-src-display');
+  if (!pipeline || !display) return;
+  var active   = 'background:#1a3a1a;color:#5a9a5a;border:1px solid #2a6a2a;border-radius:3px;';
+  var inactive = 'background:#2a2a2a;color:#888;border:1px solid #444;border-radius:3px;';
+  pipeline.style.cssText += src === 'pipeline' ? active : inactive;
+  display.style.cssText  += src === 'display'  ? active : inactive;
+}
+
+function dcSetExtR(el, i, j) {
+  socket.emit('set_param', { cam_id: _dcCamId(el), key: 'dc_ext_r' + i + '' + j, value: parseFloat(el.value) });
+}
+function _dcSetExtRMatrix(block, flatR) {
+  if (!flatR || flatR.length !== 9) return;
+  flatR.forEach(function (v, idx) {
+    var i = Math.floor(idx / 3), j = idx % 3;
+    var el = block.querySelector('.dc-ext-r' + i + '' + j);
+    if (el) el.value = parseFloat(v.toFixed(6));
+  });
+}
+
 // ── Params save ──────────────────────────────────────────────────────────
 
 function dcSaveParams(el) {
@@ -88,6 +114,7 @@ socket.on('dc_params_event', function (data) {
     _setNum('.dc-tx-input',  data.ext_tx);
     _setNum('.dc-ty-input',  data.ext_ty);
     _setNum('.dc-tz-input',  data.ext_tz);
+    _dcSetExtRMatrix(block, data.ext_R);
     if (status) {
       if (data.source === 'saved')    status.textContent = 'Params saved: ' + (data.filename || '');
       else if (data.source === 'stereo_cal') status.textContent = 'Params loaded (stereo_cal)';
@@ -190,8 +217,10 @@ socket.on('state', function (data) {
     _setNum('.dc-tx-input',    st.dc_ext_tx);
     _setNum('.dc-ty-input',    st.dc_ext_ty);
     _setNum('.dc-tz-input',    st.dc_ext_tz);
+    _dcSetExtRMatrix(block, st.dc_ext_R);
 
     _dcUpdateColorCamList(block, allCamIds, st.dc_color_cam, st.dc_color_cam_auto);
+    if (st.dc_color_cam_source) _dcUpdateColorSrcBtns(block, st.dc_color_cam_source);
     _dcSyncManualRange(block,   autoCb ? autoCb.checked : true);
     _dcSyncColorSection(block,  vcCb   ? vcCb.checked   : false);
   });

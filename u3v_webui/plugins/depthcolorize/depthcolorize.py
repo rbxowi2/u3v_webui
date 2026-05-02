@@ -1,4 +1,4 @@
-"""plugins/depthcolorize/depthcolorize.py — DepthColorize plugin (1.4.0)
+"""plugins/depthcolorize/depthcolorize.py — DepthColorize plugin (1.5.0)
 
 Display-only plugin: reads Z16 raw depth data from the driver's raw frame
 channel and renders it with a user-configurable depth range and colormap.
@@ -35,7 +35,8 @@ dc_color_cam      str     Colour source cam_id, "" = auto
 dc_color_fx/fy    float   Colour camera focal length (default SR300 nominal)
 dc_color_cx/cy    float   Colour camera principal point (default SR300 nominal)
 dc_ext_tx/ty/tz   float   Extrinsic T depth→colour in mm (default 25/0/0)
-Internal: dc_ext_R (3×3 rotation, loaded from stereo cal, not user-editable)
+dc_ext_r{i}{j}   float   R matrix element [i,j], i/j in 0-2 (default identity)
+dc_color_cam_source str  Colour frame source: "pipeline" | "display" (default pipeline)
 """
 
 import io
@@ -126,7 +127,8 @@ class DepthColorize(PluginBase):
 
         # Vertex colour
         self._vertex_color = False
-        self._color_cam    = ""       # "" = auto
+        self._color_cam        = ""       # "" = auto
+        self._color_cam_source = "pipeline"   # "pipeline" | "display"
 
         # Colour camera intrinsics (SR300 nominal @ 640×480)
         self._color_fx = 616.0
@@ -149,7 +151,7 @@ class DepthColorize(PluginBase):
     @property
     def name(self)        -> str: return "DepthColorize"
     @property
-    def version(self)     -> str: return "1.4.0"
+    def version(self)     -> str: return "1.5.0"
     @property
     def description(self) -> str: return "Re-colorize Z16 depth + PLY export with optional vertex colour"
 
@@ -314,6 +316,7 @@ class DepthColorize(PluginBase):
                     "color_fx": self._color_fx, "color_fy": self._color_fy,
                     "color_cx": self._color_cx, "color_cy": self._color_cy,
                     "ext_tx":   self._ext_tx, "ext_ty": self._ext_ty, "ext_tz": self._ext_tz,
+                    "ext_R":    self._ext_R.flatten().tolist(),
                 }
             log(f"[DepthColorize] Auto-loaded stereo params for {self._cam_id}→{resolved}")
             if self._sio:
@@ -415,6 +418,7 @@ class DepthColorize(PluginBase):
             cx  = self._cx;  cy  = self._cy
             vc       = self._vertex_color
             ccam_sel = self._color_cam
+            ccam_src = self._color_cam_source
             cfx = self._color_fx; cfy = self._color_fy
             ccx = self._color_cx; ccy = self._color_cy
             tx  = self._ext_tx / 1000.0   # mm → m
@@ -448,7 +452,10 @@ class DepthColorize(PluginBase):
         if vc:
             ccam = ccam_sel if ccam_sel else self._auto_color_cam()
             if ccam:
-                color_frame = self._state.get_latest_frame(ccam)
+                if ccam_src == "display":
+                    color_frame = self._state.get_display_frame(ccam)
+                else:
+                    color_frame = self._state.get_latest_frame(ccam)
                 if color_frame is not None:
                     rgb = self._sample_color(
                         x_m[valid], y_m[valid], z_m[valid],
@@ -564,6 +571,23 @@ class DepthColorize(PluginBase):
         _float  = lambda v, lo=None: max(lo, float(v)) if lo is not None else float(v)
         _bool   = lambda v: bool(v)
 
+        if key == "dc_color_cam_source":
+            src = str(value)
+            if src in ("pipeline", "display"):
+                with self._lock:
+                    self._color_cam_source = src
+            return True
+
+        if key.startswith("dc_ext_r") and len(key) == 10:
+            try:
+                i, j = int(key[8]), int(key[9])
+                if 0 <= i < 3 and 0 <= j < 3:
+                    with self._lock:
+                        self._ext_R[i, j] = float(value)
+            except (ValueError, IndexError):
+                pass
+            return True
+
         # dc_color_cam: switching mode triggers auto-load
         if key == "dc_color_cam":
             color_cam = str(value)
@@ -612,24 +636,26 @@ class DepthColorize(PluginBase):
             cm_idx   = _COLORMAPS.index(self._colormap) if self._colormap in _COLORMAPS else 0
             auto_cam = self._auto_color_cam() if not self._color_cam else ""
             return {
-                "dc_enabled":        self._enabled,
-                "dc_auto_range":     self._auto_range,
-                "dc_clip_min":       self._clip_min,
-                "dc_clip_max":       self._clip_max,
-                "dc_depth_scale":    self._depth_scale,
-                "dc_colormap":       cm_idx,
-                "dc_fx":             self._fx,
-                "dc_fy":             self._fy,
-                "dc_cx":             self._cx,
-                "dc_cy":             self._cy,
-                "dc_vertex_color":   self._vertex_color,
-                "dc_color_cam":      self._color_cam,
-                "dc_color_cam_auto": auto_cam,
-                "dc_color_fx":       self._color_fx,
-                "dc_color_fy":       self._color_fy,
-                "dc_color_cx":       self._color_cx,
-                "dc_color_cy":       self._color_cy,
-                "dc_ext_tx":         self._ext_tx,
-                "dc_ext_ty":         self._ext_ty,
-                "dc_ext_tz":         self._ext_tz,
+                "dc_enabled":           self._enabled,
+                "dc_auto_range":        self._auto_range,
+                "dc_clip_min":          self._clip_min,
+                "dc_clip_max":          self._clip_max,
+                "dc_depth_scale":       self._depth_scale,
+                "dc_colormap":          cm_idx,
+                "dc_fx":                self._fx,
+                "dc_fy":                self._fy,
+                "dc_cx":                self._cx,
+                "dc_cy":                self._cy,
+                "dc_vertex_color":      self._vertex_color,
+                "dc_color_cam":         self._color_cam,
+                "dc_color_cam_auto":    auto_cam,
+                "dc_color_cam_source":  self._color_cam_source,
+                "dc_color_fx":          self._color_fx,
+                "dc_color_fy":          self._color_fy,
+                "dc_color_cx":          self._color_cx,
+                "dc_color_cy":          self._color_cy,
+                "dc_ext_tx":            self._ext_tx,
+                "dc_ext_ty":            self._ext_ty,
+                "dc_ext_tz":            self._ext_tz,
+                "dc_ext_R":             self._ext_R.flatten().tolist(),
             }
