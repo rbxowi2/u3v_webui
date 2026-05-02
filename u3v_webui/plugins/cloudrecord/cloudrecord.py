@@ -154,7 +154,7 @@ class CloudRecord(PluginBase):
     @property
     def name(self)        -> str: return "RTAB-Map_record"
     @property
-    def version(self)     -> str: return "1.4.0"
+    def version(self)     -> str: return "1.5.0"
     @property
     def description(self) -> str: return "RTAB-Map RGB-D dataset recorder with depth filter and GRBL turntable support"
 
@@ -244,6 +244,7 @@ class CloudRecord(PluginBase):
                     "color_cx":  self._color_cx, "color_cy":  self._color_cy,
                     "ext_tx":    self._ext_tx,   "ext_ty":    self._ext_ty,
                     "ext_tz":    self._ext_tz,
+                    "ext_R":     self._ext_R.flatten().tolist(),
                 }
             self._sio.emit("cr_params_event", evt)
 
@@ -959,6 +960,16 @@ class CloudRecord(PluginBase):
                 self._color_cam_source = v if v in ("pipeline", "display") else "pipeline"
             return True
 
+        if key.startswith("cr_ext_r") and len(key) == 10:
+            try:
+                i, j = int(key[8]), int(key[9])
+                if 0 <= i < 3 and 0 <= j < 3:
+                    with self._lock:
+                        self._ext_R[i, j] = float(value)
+            except (ValueError, IndexError):
+                pass
+            return True
+
         mapping = {
             "cr_mode":               ("_mode",               str),
             "cr_depth_scale":        ("_depth_scale",        lambda v: float(v) if float(v) > 0 else 0.125),
@@ -1023,6 +1034,7 @@ class CloudRecord(PluginBase):
                 "cr_ext_tx":             self._ext_tx,
                 "cr_ext_ty":             self._ext_ty,
                 "cr_ext_tz":             self._ext_tz,
+                "cr_ext_R":              self._ext_R.flatten().tolist(),
                 "cr_servo_ip":           self._servo_ip,
                 "cr_servo_port":         self._servo_port,
                 "cr_servo_axis":         self._servo_axis,

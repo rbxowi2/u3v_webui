@@ -1,4 +1,4 @@
-// cloudrecord/ui.js — RTAB-Map_record plugin frontend (1.4.0)
+// cloudrecord/ui.js — RTAB-Map_record plugin frontend (1.5.0)
 // All DOM queries scoped to .plugin-ui-block to support multi-camera.
 
 function _crBlock(el) { return el.closest('.plugin-ui-block'); }
@@ -36,6 +36,19 @@ function crToggleScan(el) {
 
 function crSaveParams(el) {
   socket.emit('cr_save_params', { cam_id: _crCamId(el) });
+}
+
+function crSetExtR(el, i, j) {
+  socket.emit('set_param', { cam_id: _crCamId(el), key: 'cr_ext_r' + i + '' + j, value: parseFloat(el.value) });
+}
+
+function _crSetExtRMatrix(block, flatR) {
+  if (!flatR || flatR.length !== 9) return;
+  flatR.forEach(function(v, idx) {
+    var i = Math.floor(idx / 3), j = idx % 3;
+    var el = block.querySelector('.cr-ext-r' + i + '' + j);
+    if (el) el.value = parseFloat(v.toFixed(6));
+  });
 }
 
 function crSetColorCamSource(el, src) {
@@ -283,6 +296,7 @@ socket.on('cr_params_event', function(data) {
       _v('.cr-ext-tx', data.ext_tx);
       _v('.cr-ext-ty', data.ext_ty);
       _v('.cr-ext-tz', data.ext_tz);
+      _crSetExtRMatrix(block, data.ext_R);
     }
   });
 });
@@ -332,6 +346,7 @@ socket.on('state', function(data) {
     _set('.cr-ext-tx',   st.cr_ext_tx);
     _set('.cr-ext-ty',   st.cr_ext_ty);
     _set('.cr-ext-tz',   st.cr_ext_tz);
+    _crSetExtRMatrix(block, st.cr_ext_R);
     _set('.cr-servo-ip',      st.cr_servo_ip);
     _set('.cr-servo-port',    st.cr_servo_port);
     _set('.cr-servo-axis',    st.cr_servo_axis);
