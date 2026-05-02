@@ -1,4 +1,4 @@
-// cloudrecord/ui.js — RTAB-Map_record plugin frontend (1.3.2)
+// cloudrecord/ui.js — RTAB-Map_record plugin frontend (1.4.0)
 // All DOM queries scoped to .plugin-ui-block to support multi-camera.
 
 function _crBlock(el) { return el.closest('.plugin-ui-block'); }
@@ -36,6 +36,24 @@ function crToggleScan(el) {
 
 function crSaveParams(el) {
   socket.emit('cr_save_params', { cam_id: _crCamId(el) });
+}
+
+function crSetColorCamSource(el, src) {
+  var block = _crBlock(el);
+  if (!block) return;
+  socket.emit('set_param', { cam_id: _crCamId(el), key: 'cr_color_cam_source', value: src });
+  _crUpdateColorSrcBtns(block, src);
+}
+
+function _crUpdateColorSrcBtns(block, src) {
+  ['pipeline', 'display'].forEach(function(s) {
+    var b = block.querySelector('.cr-color-src-' + s);
+    if (!b) return;
+    var on = (s === src);
+    b.style.background = on ? '#2a5a8c' : '#2a2a2a';
+    b.style.color      = on ? '#90ccf0' : '#888';
+    b.style.border     = on ? '1px solid #3a7abc' : '1px solid #444';
+  });
 }
 
 function _crSetToggleBtn(btn, scanning) {
@@ -320,6 +338,11 @@ socket.on('state', function(data) {
     _set('.cr-servo-feed',    st.cr_servo_feed);
     _set('.cr-servo-dwell',   st.cr_servo_dwell);
     _set('.cr-servo-timeout', st.cr_servo_timeout);
+
+    // Colour camera source buttons
+    if (st.cr_color_cam_source !== undefined) {
+      _crUpdateColorSrcBtns(block, st.cr_color_cam_source);
+    }
 
     // Colour camera list — default empty, no pre-selection
     var ccSel = block.querySelector('.cr-color-cam');

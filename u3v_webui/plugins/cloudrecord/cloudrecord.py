@@ -1,4 +1,4 @@
-"""cloudrecord/cloudrecord.py — Point Cloud Recorder (1.2.0)
+"""cloudrecord/cloudrecord.py — Point Cloud Recorder (1.4.0)
 
 Continuously captures Z16 depth frames as individual files.
 No on-device fusion — all processing delegated to desktop.
@@ -94,7 +94,8 @@ class CloudRecord(PluginBase):
         self._mode       = "free"
         self._depth_scale = 0.125
         self._capture_fps = 1.0
-        self._color_cam    = ""
+        self._color_cam        = ""
+        self._color_cam_source = "pipeline"   # "pipeline" | "display"
 
         # Depth range filter (metres)
         self._depth_range_mode = "manual"   # manual | auto
@@ -153,7 +154,7 @@ class CloudRecord(PluginBase):
     @property
     def name(self)        -> str: return "RTAB-Map_record"
     @property
-    def version(self)     -> str: return "1.3.2"
+    def version(self)     -> str: return "1.4.0"
     @property
     def description(self) -> str: return "RTAB-Map RGB-D dataset recorder with depth filter and GRBL turntable support"
 
@@ -508,6 +509,7 @@ class CloudRecord(PluginBase):
         with self._lock:
             sdir        = self._session_dir
             ccam        = self._color_cam
+            ccam_src    = self._color_cam_source
             ds          = self._depth_scale
             mode        = self._depth_range_mode
             dmin        = self._depth_min_m
@@ -561,7 +563,10 @@ class CloudRecord(PluginBase):
         # ── Save registered RGB frame ──────────────────────────────────────
         rgb_saved = False
         if ccam and self._state:
-            cf = self._state.get_latest_frame(ccam)
+            if ccam_src == "display":
+                cf = self._state.get_display_frame(ccam)
+            else:
+                cf = self._state.get_latest_frame(ccam)
             if cf is not None:
                 with self._lock:
                     cfx = self._color_fx; cfy = self._color_fy
@@ -948,6 +953,12 @@ class CloudRecord(PluginBase):
             self._auto_load_for_color_cam(str(value))
             return True
 
+        if key == "cr_color_cam_source":
+            v = str(value)
+            with self._lock:
+                self._color_cam_source = v if v in ("pipeline", "display") else "pipeline"
+            return True
+
         mapping = {
             "cr_mode":               ("_mode",               str),
             "cr_depth_scale":        ("_depth_scale",        lambda v: float(v) if float(v) > 0 else 0.125),
@@ -995,6 +1006,7 @@ class CloudRecord(PluginBase):
                 "cr_depth_scale":        self._depth_scale,
                 "cr_capture_fps":        self._capture_fps,
                 "cr_color_cam":          self._color_cam,
+                "cr_color_cam_source":   self._color_cam_source,
                 "cr_depth_range_mode":   self._depth_range_mode,
                 "cr_depth_min":          round(self._depth_min_m  * 1000, 1),
                 "cr_depth_max":          round(self._depth_max_m  * 1000, 1),
