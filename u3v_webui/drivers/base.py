@@ -51,6 +51,9 @@ class CameraDriver(threading.Thread, ABC):
         threading.Thread.__init__(self, daemon=True)
         self.on_frame:      Optional[Callable[[np.ndarray, int], None]] = None
         self.on_disconnect: Optional[Callable[[], None]]                = None
+        self._injected_raw:     Optional[np.ndarray] = None
+        self._injected_raw_fmt: Optional[str]        = None
+        self._inject_lock = threading.Lock()
 
     # ── Device discovery ───────────────────────────────────────────────────────
 
@@ -144,9 +147,12 @@ class CameraDriver(threading.Thread, ABC):
         conversion to BGR uint8.  Returns ``None`` if this driver does not
         expose raw data.
 
-        Consumers must check ``raw_frame_format`` to know how to interpret
-        the array (dtype, shape, bit-depth).
+        Injected synthetic frames (from inject_raw) take precedence when no
+        hardware raw is available.  Consumers must check ``raw_frame_format``.
         """
+        with self._inject_lock:
+            if self._injected_raw is not None:
+                return self._injected_raw
         return None
 
     @property
@@ -168,7 +174,22 @@ class CameraDriver(threading.Thread, ABC):
         ``YUYV``   Packed YUV 4:2:2 (uint8, H×W×2)
         =========  =================================================
         """
+        with self._inject_lock:
+            if self._injected_raw_fmt is not None:
+                return self._injected_raw_fmt
         return None
+
+    def inject_raw(self, frame: np.ndarray, fmt: str) -> None:
+        """Store a synthetic raw frame to be returned by latest_raw_frame."""
+        with self._inject_lock:
+            self._injected_raw     = frame
+            self._injected_raw_fmt = fmt
+
+    def clear_injected_raw(self) -> None:
+        """Remove any previously injected synthetic raw frame."""
+        with self._inject_lock:
+            self._injected_raw     = None
+            self._injected_raw_fmt = None
 
     # ── Native mode query ──────────────────────────────────────────────────────
 
