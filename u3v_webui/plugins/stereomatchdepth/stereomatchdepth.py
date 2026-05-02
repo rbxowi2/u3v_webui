@@ -1,4 +1,4 @@
-"""plugins/stereomatchdepth/stereomatchdepth.py — StereoMatch & Depth plugin (1.1.0)
+"""plugins/stereomatchdepth/stereomatchdepth.py — StereoMatch & Depth plugin (1.1.1)
 
 Combined stereo disparity matching and depth mapping from rectified frames.
 
@@ -149,7 +149,7 @@ class StereoMatchDepth(PluginBase):
     @property
     def name(self)        -> str: return "StereoMatch & Depth"
     @property
-    def version(self)     -> str: return "1.1.0"
+    def version(self)     -> str: return "1.1.1"
     @property
     def description(self) -> str: return "Combined stereo disparity and depth map with PLY export"
 
@@ -508,12 +508,7 @@ class StereoMatchDepth(PluginBase):
                 avg_d = float(disp_f[valid_disp].mean()) if valid_disp.any() else 0.0
 
                 now = time.time()
-                if now - self._diag_last_log >= 10.0:
-                    self._diag_last_log = now
-                    log(f"[StereoMatchDepth] diag  L={cam_L} R={cam_R} "
-                        f"cal={cal_sz} proc={isz} scale=1/{scale} "
-                        f"disp_raw min={int(disp.min())} max={int(disp.max())} "
-                        f"valid={valid_pct_d:.1f}%")
+                _diag_due = (now - self._diag_last_log >= 10.0)
 
                 # ── Colorize disparity ────────────────────────────────────────
                 disp_u8 = np.zeros(disp_f.shape, dtype=np.uint8)
@@ -531,23 +526,47 @@ class StereoMatchDepth(PluginBase):
                 # ── Reproject → depth ─────────────────────────────────────────
                 pts3d = cv2.reprojectImageTo3D(disp_f, Q)
                 Z     = pts3d[:, :, 2]
-                valid_z     = np.isfinite(Z) & (Z > clip_mn) & (Z < clip_mx)
-                valid_depth = valid_disp & valid_z
-                valid_pct_z = float(valid_depth.mean() * 100.0)
+
+                # disp_valid_depth: for display only — all finite positive Z values
+                # valid_depth:      clip-filtered — used for PLY / Z16 inject / stats
+                disp_valid_depth = valid_disp & np.isfinite(Z) & (Z > 0)
+                valid_z          = np.isfinite(Z) & (Z > clip_mn) & (Z < clip_mx)
+                valid_depth      = valid_disp & valid_z
+                valid_pct_z      = float(valid_depth.mean() * 100.0)
                 z_vals = Z[valid_depth]
                 min_z  = float(z_vals.min())      if z_vals.size else 0.0
                 max_z  = float(z_vals.max())      if z_vals.size else 0.0
                 med_z  = float(np.median(z_vals)) if z_vals.size else 0.0
 
+                # Periodic diagnostics — disparity + actual Z range
+                if _diag_due:
+                    self._diag_last_log = now
+                    log(f"[StereoMatchDepth] diag  L={cam_L} R={cam_R} "
+                        f"cal={cal_sz} proc={isz} scale=1/{scale} "
+                        f"disp_raw min={int(disp.min())} max={int(disp.max())} "
+                        f"disp_valid={valid_pct_d:.1f}%")
+                    dv = Z[disp_valid_depth]
+                    if dv.size:
+                        log(f"[StereoMatchDepth] depth Z  "
+                            f"min={dv.min():.2f}  med={float(np.median(dv)):.2f}  "
+                            f"max={dv.max():.2f}  clip=[{clip_mn},{clip_mx}]  "
+                            f"clip_valid={valid_pct_z:.1f}%")
+
                 # ── Colorize depth (inverted JET: closer = warmer) ────────────
+                # Use disp_valid_depth for colorization so display is never black
+                # due to clip range mismatch (e.g. calibration in meters vs mm).
                 depth_u8 = np.zeros(Z.shape, dtype=np.uint8)
-                if valid_depth.any() and max_z > min_z:
-                    norm = np.clip((Z[valid_depth] - min_z) / (max_z - min_z), 0, 1)
-                    depth_u8[valid_depth] = ((1.0 - norm) * 255).astype(np.uint8)
-                elif valid_depth.any():
-                    depth_u8[valid_depth] = 128
+                dv_z = Z[disp_valid_depth]
+                if dv_z.size:
+                    dv_min, dv_max = float(dv_z.min()), float(dv_z.max())
+                    if dv_max > dv_min:
+                        norm = np.clip(
+                            (Z[disp_valid_depth] - dv_min) / (dv_max - dv_min), 0, 1)
+                        depth_u8[disp_valid_depth] = ((1.0 - norm) * 255).astype(np.uint8)
+                    else:
+                        depth_u8[disp_valid_depth] = 128
                 depth_colored = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
-                depth_colored[~valid_depth] = 0
+                depth_colored[~disp_valid_depth] = 0
 
                 # ── Z16 inject ────────────────────────────────────────────────
                 with self._lock:
