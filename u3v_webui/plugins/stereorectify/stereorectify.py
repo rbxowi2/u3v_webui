@@ -76,7 +76,7 @@ class StereoRectify(PluginBase):
     def name(self) -> str:    return "StereoRectify"
 
     @property
-    def version(self) -> str: return "1.1.0"
+    def version(self) -> str: return "1.1.1"
 
     @property
     def description(self) -> str:
@@ -316,7 +316,7 @@ class StereoRectify(PluginBase):
             P2[0, 2] = cx_new; P2[1, 2] = cy_new
             P2[0, 3] = P2[0, 3] * scale   # keep physical baseline Tx constant
             # Recompute Q from modified P1/P2
-            Tx = -P2[0, 3] / f_new if f_new != 0 else 1.0
+            Tx = P2[0, 3] / f_new if f_new != 0 else 1.0
             Q = np.array([
                 [1, 0, 0, -cx_new],
                 [0, 1, 0, -cy_new],
