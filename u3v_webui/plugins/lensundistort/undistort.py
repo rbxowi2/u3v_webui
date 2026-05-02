@@ -1,4 +1,4 @@
-"""plugins/lensundistort/undistort.py — LensUndistort plugin (1.1.0)
+"""plugins/lensundistort/undistort.py — LensUndistort plugin (1.2.0)
 
 Local plugin: one instance per camera.
 Reads calibration data produced by LensCalibrate and applies cv2.remap()
@@ -11,6 +11,11 @@ Output modes:
   balance (fov_out=0): 0.0=crop black borders, 1.0=retain full original FOV.
   fov_out  (fov_out>0): rectilinear output at the specified H-FOV (degrees).
                         K_new is derived directly — balance is ignored.
+  scale: 1.0 / 0.5 / 0.25 — output resolution multiplier (aspect ratio preserved).
+         Implemented by passing the scaled output size directly to initUndistortRectifyMap
+         so no extra resize step is needed.
+
+- v1.2.0: Add scale parameter — 1×, ½×, ¼× pipeline output resolution.
 - v1.1.0: Add fov_out parameter — rectilinear output at a specific H-FOV angle.
 """
 
@@ -44,6 +49,7 @@ class LensUndistort(PluginBase):
         self._enabled  = False
         self._balance  = 0.0   # 0 = crop black borders, 1 = full original FOV
         self._fov_out  = 0.0   # 0 = use balance; >0 = rectilinear output H-FOV (degrees)
+        self._scale    = 1.0   # output resolution multiplier: 1.0, 0.5, or 0.25
 
         # Loaded calibration (from JSON)
         self._cal: Optional[dict] = None
@@ -51,7 +57,7 @@ class LensUndistort(PluginBase):
         # Computed undistort maps
         self._map1: Optional[np.ndarray] = None
         self._map2: Optional[np.ndarray] = None
-        self._map_size: Optional[tuple]  = None   # (w, h) the maps were built for
+        self._map_size: Optional[tuple]  = None   # (in_w, in_h, scale) the maps were built for
 
     # ── Identity ──────────────────────────────────────────────────────────────
 
@@ -61,7 +67,7 @@ class LensUndistort(PluginBase):
 
     @property
     def version(self) -> str:
-        return "1.1.0"
+        return "1.2.0"
 
     @property
     def description(self) -> str:
@@ -90,14 +96,15 @@ class LensUndistort(PluginBase):
             map1     = self._map1
             map2     = self._map2
             map_size = self._map_size
+            scale    = self._scale
 
         if cal is None:
             return None
 
         fh, fw = frame.shape[:2]
 
-        # Rebuild maps if not yet built or frame resolution changed
-        if map1 is None or map_size != (fw, fh):
+        # Rebuild maps if not yet built, input resolution changed, or scale changed
+        if map1 is None or map_size != (fw, fh, scale):
             self._build_maps(cal, (fw, fh))
             with self._lock:
                 map1 = self._map1
@@ -117,10 +124,12 @@ class LensUndistort(PluginBase):
             enabled   = self._enabled
             balance   = self._balance
             fov_out   = self._fov_out
+            scale     = self._scale
         return {
             "undistort_enabled":       enabled,
             "undistort_balance":       balance,
             "undistort_fov_out":       fov_out,
+            "undistort_scale":         scale,
             "undistort_has_cal":       cal is not None,
             "undistort_maps_ready":    maps_ok,
             "undistort_lens_type":     cal["lens_type"]     if cal else None,
@@ -148,6 +157,16 @@ class LensUndistort(PluginBase):
             with self._lock:
                 changed = (new_fov != self._fov_out)
                 self._fov_out = new_fov
+                if changed:
+                    self._map1 = None; self._map2 = None; self._map_size = None
+            return True
+        if key == "undistort_scale":
+            new_scale = float(value)
+            if new_scale not in (1.0, 0.5, 0.25):
+                new_scale = 1.0
+            with self._lock:
+                changed = (new_scale != self._scale)
+                self._scale = new_scale
                 if changed:
                     self._map1 = None; self._map2 = None; self._map_size = None
             return True
@@ -181,7 +200,11 @@ class LensUndistort(PluginBase):
         return cal is not None
 
     def _build_maps(self, cal: dict, frame_size: tuple):
-        """Build undistort maps for the given frame size.  Thread-safe."""
+        """Build undistort maps for the given input frame size.  Thread-safe.
+
+        Output resolution = input × scale; K_new is scaled accordingly so
+        initUndistortRectifyMap produces the smaller image directly.
+        """
         w, h         = frame_size
         cal_w, cal_h = cal["image_size"]
         lens_type    = cal["lens_type"]
@@ -189,6 +212,7 @@ class LensUndistort(PluginBase):
         K = np.array(cal["camera_matrix"], dtype=np.float64)
         D = np.array(cal["dist_coeffs"],   dtype=np.float64)
 
+        # Rescale K if input resolution differs from calibration resolution
         if (cal_w, cal_h) != (w, h):
             sx = w / cal_w; sy = h / cal_h
             K = K.copy()
@@ -198,35 +222,47 @@ class LensUndistort(PluginBase):
         with self._lock:
             balance = self._balance
             fov_out = self._fov_out
+            scale   = self._scale
+
+        out_w = max(1, round(w * scale))
+        out_h = max(1, round(h * scale))
+        out_size = (out_w, out_h)
 
         try:
             if fov_out > 0:
-                # Rectilinear output: K_new derived from desired H-FOV
-                f_new = (w / 2) / math.tan(math.radians(fov_out / 2))
+                # Rectilinear output: K_new derived from desired H-FOV at output resolution
+                f_new = (out_w / 2) / math.tan(math.radians(fov_out / 2))
                 K_new = np.array(
-                    [[f_new, 0, w / 2], [0, f_new, h / 2], [0, 0, 1]],
+                    [[f_new, 0, out_w / 2], [0, f_new, out_h / 2], [0, 0, 1]],
                     dtype=np.float64)
 
             if lens_type == "fisheye":
                 D = D.reshape(4, 1)
                 if fov_out <= 0:
-                    K_new = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
+                    K_new_full = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
                         K, D, (w, h), np.eye(3), balance=balance)
+                    K_new = K_new_full.copy()
+                    K_new[0, 0] *= scale; K_new[0, 2] *= scale
+                    K_new[1, 1] *= scale; K_new[1, 2] *= scale
                 map1, map2 = cv2.fisheye.initUndistortRectifyMap(
-                    K, D, np.eye(3), K_new, (w, h), cv2.CV_32FC1)
+                    K, D, np.eye(3), K_new, out_size, cv2.CV_32FC1)
             else:
                 D = D.reshape(1, -1)
                 if fov_out <= 0:
-                    K_new, _ = cv2.getOptimalNewCameraMatrix(K, D, (w, h), balance)
+                    K_new_full, _ = cv2.getOptimalNewCameraMatrix(K, D, (w, h), balance)
+                    K_new = K_new_full.copy()
+                    K_new[0, 0] *= scale; K_new[0, 2] *= scale
+                    K_new[1, 1] *= scale; K_new[1, 2] *= scale
                 map1, map2 = cv2.initUndistortRectifyMap(
-                    K, D, None, K_new, (w, h), cv2.CV_32FC1)
+                    K, D, None, K_new, out_size, cv2.CV_32FC1)
 
             with self._lock:
-                self._map1 = map1; self._map2 = map2; self._map_size = (w, h)
+                self._map1 = map1; self._map2 = map2; self._map_size = (w, h, scale)
+            scale_tag = f" scale={scale}" if scale != 1.0 else ""
             if fov_out > 0:
-                log(f"[LensUndistort] Maps built [{self._cam_id}] {w}×{h} fov_out={fov_out:.0f}°")
+                log(f"[LensUndistort] Maps built [{self._cam_id}] {w}×{h}→{out_w}×{out_h} fov_out={fov_out:.0f}°{scale_tag}")
             else:
-                log(f"[LensUndistort] Maps built [{self._cam_id}] {w}×{h} balance={balance}")
+                log(f"[LensUndistort] Maps built [{self._cam_id}] {w}×{h}→{out_w}×{out_h} balance={balance}{scale_tag}")
 
         except Exception as e:
             with self._lock:

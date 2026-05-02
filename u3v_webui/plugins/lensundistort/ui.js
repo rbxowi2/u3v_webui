@@ -1,4 +1,5 @@
-// lensundistort/ui.js — LensUndistort plugin frontend (1.1.0)
+// lensundistort/ui.js — LensUndistort plugin frontend (1.2.0)
+// v1.2.0: Add scale buttons — 1×, ½×, ¼× pipeline output resolution.
 // v1.1.0: Add FOV Out mode — specify rectilinear output H-FOV instead of balance.
 
 (function () {
@@ -6,6 +7,25 @@
 
   function _blk(el)    { return el.closest('.plugin-ui-block'); }
   function _blkCam(el) { const b = _blk(el); return b ? b.dataset.cam : ''; }
+
+  // ── Scale helper ───────────────────────────────────────────────────────────
+
+  function _setScaleBtn(block, scale) {
+    block.querySelectorAll('.undistort-scale-btn').forEach(btn => {
+      const active = (parseFloat(btn.dataset.scale) === scale);
+      Object.assign(btn.style, active
+        ? { background: '#1a3a1a', color: '#5a9a5a', borderColor: '#2a6a2a' }
+        : { background: '#2a2a2a', color: '#888',    borderColor: '#444'    });
+    });
+  }
+
+  window.undistortOnScale = function (el, scale) {
+    const block  = _blk(el);
+    const cam_id = _blkCam(el);
+    if (!block || !cam_id) return;
+    _setScaleBtn(block, scale);
+    socket.emit('set_param', { cam_id, key: 'undistort_scale', value: scale });
+  };
 
   // ── Mode helper ────────────────────────────────────────────────────────────
 
@@ -89,6 +109,8 @@
       const fovOut = cs.undistort_fov_out ?? 0;
       if (fovInp && fovOut > 0) fovInp.value = fovOut;
       _setMode(block, fovOut > 0 ? 'fov' : 'balance');
+
+      _setScaleBtn(block, cs.undistort_scale ?? 1.0);
 
       if (status) {
         if (!cs.undistort_has_cal) {
