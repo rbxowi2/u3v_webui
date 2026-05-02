@@ -151,7 +151,7 @@ class DepthColorize(PluginBase):
     @property
     def name(self)        -> str: return "DepthColorize"
     @property
-    def version(self)     -> str: return "1.5.0"
+    def version(self)     -> str: return "1.5.1"
     @property
     def description(self) -> str: return "Re-colorize Z16 depth + PLY export with optional vertex colour"
 
@@ -298,7 +298,7 @@ class DepthColorize(PluginBase):
         if params:
             KL = params["KL"]   # [[fx,0,cx],[0,fy,cy],[0,0,1]]
             KR = params["KR"]
-            T  = params["T"]    # [tx, ty, tz] in mm
+            T  = np.array(params["T"], dtype=np.float64).flatten()   # (3,1) or (3,) → (3,)
             R  = params.get("R", [[1,0,0],[0,1,0],[0,0,1]])
             with self._lock:
                 self._fx       = float(KL[0][0]); self._fy = float(KL[1][1])
