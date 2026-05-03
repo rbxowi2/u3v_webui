@@ -1,4 +1,4 @@
-"""cloudrecord/cloudrecord.py — Point Cloud Recorder (1.4.0)
+"""cloudrecord/cloudrecord.py — Point Cloud Recorder (1.6.0)
 
 Continuously captures Z16 depth frames as individual files.
 No on-device fusion — all processing delegated to desktop.
@@ -10,12 +10,13 @@ turntable_servo : GRBL-driven turntable, UI hidden — code kept for future use
 
 Save modes
 ----------
-pointcloud  : Z16 → backproject → PLY (optional vertex colour embedded)
-depthimage  : RTAB-Map compatible RGB-D dataset
-              depth/  — 16-bit PNG (16UC1, mm) or EXR (32FC1, metres)
-              rgb/    — 8-bit PNG colour frames (if vertex colour enabled)
-              depth.txt / rgb.txt / associations.txt  — TUM-format index files
+depthimage  : RGB-D dataset compatible with both RTAB-Map and Open3D
+              depth/  — 16-bit PNG (16UC1, mm)
+              color/  — 8-bit PNG colour frames (if vertex colour enabled)
+              depth.txt / rgb.txt / associations.txt  — TUM-format index files (RTAB-Map)
               camera_info.yaml  — ROS-style intrinsics (RTAB-Map compatible)
+              intrinsic.json    — Open3D PinholeCameraIntrinsic format
+              config.json       — Open3D ReconstructionSystem config
               metadata.json     — azimuth/elevation per frame
 
 Depth range filter [depth_min_m, depth_max_m]:
@@ -27,13 +28,15 @@ Session output
 --------------
 captures/depth/session_YYYYMMDD_HHMMSS/
   depth/
-    1620000000.000000.png/.exr  (one file per frame)
-  rgb/                          (only if vertex colour enabled)
+    1620000000.000000.png  (one file per frame)
+  color/                   (only if vertex colour enabled)
     1620000000.000000.png
   depth.txt
-  rgb.txt                       (only if vertex colour enabled)
-  associations.txt              (only if vertex colour enabled)
+  rgb.txt                  (only if vertex colour enabled; paths reference color/)
+  associations.txt         (only if vertex colour enabled)
   camera_info.yaml
+  intrinsic.json
+  config.json
   metadata.json
 
 Intrinsics auto-loaded on camera open (same format as depthcolorize):
@@ -152,11 +155,11 @@ class CloudRecord(PluginBase):
     # ── Identity ──────────────────────────────────────────────────────────
 
     @property
-    def name(self)        -> str: return "RTAB-Map_record"
+    def name(self)        -> str: return "Z16&Color_Record"
     @property
-    def version(self)     -> str: return "1.5.1"
+    def version(self)     -> str: return "1.6.1"
     @property
-    def description(self) -> str: return "RTAB-Map RGB-D dataset recorder with depth filter and GRBL turntable support"
+    def description(self) -> str: return "Z16 depth + colour RGB-D dataset recorder (RTAB-Map / Open3D compatible)"
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -172,7 +175,7 @@ class CloudRecord(PluginBase):
             with self._lock:
                 self._fx = fx; self._fy = fy
                 self._cx = cx; self._cy = cy
-            log(f"[RTAB-Map_record] Auto-loaded depth intrinsics for {cam_id}")
+            log(f"[Z16&Color_Record] Auto-loaded depth intrinsics for {cam_id}")
             if self._sio:
                 self._sio.emit("cr_params_event", {
                     "cam_id": cam_id, "ok": True, "source": "lens_cal",
@@ -233,7 +236,7 @@ class CloudRecord(PluginBase):
             self._ext_ty   = float(T[1])
             self._ext_tz   = float(T[2])
             self._ext_R    = np.array(R, dtype=np.float64)
-        log(f"[RTAB-Map_record] Auto-loaded stereo params {self._cam_id}→{color_cam}")
+        log(f"[Z16&Color_Record] Auto-loaded stereo params {self._cam_id}→{color_cam}")
         if self._sio:
             with self._lock:
                 evt = {
@@ -534,8 +537,8 @@ class CloudRecord(PluginBase):
         # ── Write calibration on first frame (image size now known) ────────
         if not calib_done:
             h, w = raw.shape
-            self._write_calibration(sdir, fx, fy, cx, cy, w, h)
-            os.makedirs(os.path.join(sdir, "rgb"), exist_ok=True)
+            self._write_calibration(sdir, fx, fy, cx, cy, w, h, dmin, dmax)
+            os.makedirs(os.path.join(sdir, "color"), exist_ok=True)
             for fname in ("rgb.txt", "associations.txt"):
                 hdr = "# timestamp filename\n" if fname == "rgb.txt" \
                       else "# ts_rgb rgb_file ts_depth depth_file\n"
@@ -555,7 +558,7 @@ class CloudRecord(PluginBase):
             depth_fname = f"{ts_str}.png"
             cv2.imwrite(os.path.join(depth_dir, depth_fname), depth_u16)
         except Exception as e:
-            log(f"[RTAB-Map_record] depth save failed: {e}")
+            log(f"[Z16&Color_Record] depth save failed: {e}")
             return
 
         with open(os.path.join(sdir, "depth.txt"), "a") as f:
@@ -579,15 +582,15 @@ class CloudRecord(PluginBase):
                     fx, fy, cx, cy, cfx, cfy, ccx, ccy, R, tx, ty, tz, ds)
                 rgb_fname = f"{ts_str}.png"
                 try:
-                    cv2.imwrite(os.path.join(sdir, "rgb", rgb_fname), registered)
+                    cv2.imwrite(os.path.join(sdir, "color", rgb_fname), registered)
                     with open(os.path.join(sdir, "rgb.txt"), "a") as f:
-                        f.write(f"{ts_str} rgb/{rgb_fname}\n")
+                        f.write(f"{ts_str} color/{rgb_fname}\n")
                     with open(os.path.join(sdir, "associations.txt"), "a") as f:
-                        f.write(f"{ts_str} rgb/{rgb_fname} "
+                        f.write(f"{ts_str} color/{rgb_fname} "
                                 f"{ts_str} depth/{depth_fname}\n")
                     rgb_saved = True
                 except Exception as e:
-                    log(f"[RTAB-Map_record] RGB save failed: {e}")
+                    log(f"[Z16&Color_Record] RGB save failed: {e}")
 
         # ── metadata.json ──────────────────────────────────────────────────
         n_valid = int(valid_mask.sum())
@@ -601,7 +604,7 @@ class CloudRecord(PluginBase):
             "depth_file":    f"depth/{depth_fname}",
         }
         if rgb_saved:
-            record["rgb_file"] = f"rgb/{ts_str}.png"
+            record["rgb_file"] = f"color/{ts_str}.png"
         with self._lock:
             self._frame_idx += 1
             self._metadata.append(record)
@@ -609,9 +612,11 @@ class CloudRecord(PluginBase):
 
     def _write_calibration(self, sdir: str,
                            fx: float, fy: float, cx: float, cy: float,
-                           w: int, h: int):
-        """Write OpenCV FileStorage YAML readable by RTAB-Map calibration loader."""
-        content = (
+                           w: int, h: int,
+                           depth_min_m: float = 0.1, depth_max_m: float = 5.0):
+        """Write RTAB-Map YAML + Open3D intrinsic.json + Open3D config.json."""
+        # ── camera_info.yaml (RTAB-Map) ────────────────────────────────────
+        yaml_content = (
             f"%YAML:1.0\n"
             f"---\n"
             f"image_width: {w}\n"
@@ -643,9 +648,45 @@ class CloudRecord(PluginBase):
         try:
             with open(os.path.join(sdir, "camera_info.yaml"), "w",
                       encoding="utf-8") as f:
-                f.write(content)
+                f.write(yaml_content)
         except Exception as e:
-            log(f"[RTAB-Map_record] calibration write failed: {e}")
+            log(f"[Z16&Color_Record] camera_info.yaml write failed: {e}")
+
+        # ── intrinsic.json (Open3D PinholeCameraIntrinsic, column-major) ───
+        intrinsic = {
+            "width": w,
+            "height": h,
+            "intrinsic_matrix": [fx, 0.0, 0.0, 0.0, fy, 0.0, cx, cy, 1.0],
+        }
+        try:
+            with open(os.path.join(sdir, "intrinsic.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(intrinsic, f, indent=4)
+        except Exception as e:
+            log(f"[Z16&Color_Record] intrinsic.json write failed: {e}")
+
+        # ── config.json (Open3D ReconstructionSystem) ──────────────────────
+        config = {
+            "name": os.path.basename(sdir),
+            "path_dataset": sdir,
+            "path_intrinsic": os.path.join(sdir, "intrinsic.json"),
+            "voxel_size": 0.0015,
+            "max_depth": round(depth_max_m, 6),
+            "min_depth": round(depth_min_m, 6),
+            "max_depth_diff": 0.01,
+            "preference_loop_closure_odometry": 0.1,
+            "preference_loop_closure_registration": 5.0,
+            "tsdf_cubic_size": 0.4,
+            "icp_method": "color",
+            "global_registration": "ransac",
+            "python_multi_threading": False,
+        }
+        try:
+            with open(os.path.join(sdir, "config.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(config, f, indent=4)
+        except Exception as e:
+            log(f"[Z16&Color_Record] config.json write failed: {e}")
 
     # ── Session / PLY save ─────────────────────────────────────────────────
 
@@ -655,7 +696,7 @@ class CloudRecord(PluginBase):
         try:
             os.makedirs(os.path.join(sdir, "depth"), exist_ok=True)
         except Exception as e:
-            log(f"[RTAB-Map_record] cannot create session dir: {e}")
+            log(f"[Z16&Color_Record] cannot create session dir: {e}")
             sdir = ""
         if sdir:
             try:
@@ -669,7 +710,7 @@ class CloudRecord(PluginBase):
             self._metadata      = []
             self._calib_written = False
         if sdir:
-            log(f"[RTAB-Map_record] session started: {sdir}")
+            log(f"[Z16&Color_Record] session started: {sdir}")
 
     def _flush_metadata(self):
         with self._lock:
@@ -682,7 +723,7 @@ class CloudRecord(PluginBase):
                       encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
         except Exception as e:
-            log(f"[RTAB-Map_record] metadata flush failed: {e}")
+            log(f"[Z16&Color_Record] metadata flush failed: {e}")
 
     # ── State helpers ──────────────────────────────────────────────────────
 
@@ -860,7 +901,7 @@ class CloudRecord(PluginBase):
             with open(depth_path, "w", encoding="utf-8") as f:
                 json.dump({"camera_matrix": [[fx,0.0,cx],[0.0,fy,cy],[0.0,0.0,1.0]]},
                           f, indent=2)
-            log(f"[RTAB-Map_record] Saved depth intrinsics → {depth_path}")
+            log(f"[Z16&Color_Record] Saved depth intrinsics → {depth_path}")
         except Exception as e:
             self._emit_event("warn", f"Depth save failed: {e}")
             return
@@ -875,7 +916,7 @@ class CloudRecord(PluginBase):
                         "R":  R,
                         "T":  [tx, ty, tz],
                     }, f, indent=2)
-                log(f"[RTAB-Map_record] Saved stereo params → {stereo_path}")
+                log(f"[Z16&Color_Record] Saved stereo params → {stereo_path}")
             except Exception as e:
                 self._emit_event("warn", f"Stereo save failed: {e}")
                 return
@@ -903,7 +944,7 @@ class CloudRecord(PluginBase):
         with self._lock:
             mode = self._mode
             if self._scan_state not in (_ST_IDLE, _ST_DONE, _ST_ERROR):
-                log(f"[RTAB-Map_record] Start ignored — state is {self._scan_state}")
+                log(f"[Z16&Color_Record] Start ignored — state is {self._scan_state}")
                 return
 
         self._stop_worker()
@@ -913,7 +954,7 @@ class CloudRecord(PluginBase):
             self._step_idx   = 0
 
         self._start_session()
-        log(f"[RTAB-Map_record] Starting mode={mode}")
+        log(f"[Z16&Color_Record] Starting mode={mode}")
 
         if mode == "free":
             self._last_capture = 0.0

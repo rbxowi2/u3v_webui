@@ -1,4 +1,4 @@
-// cloudrecord/ui.js — RTAB-Map_record plugin frontend (1.5.0)
+// cloudrecord/ui.js — Z16&Color_Record plugin frontend (1.6.1)
 // All DOM queries scoped to .plugin-ui-block to support multi-camera.
 
 function _crBlock(el) { return el.closest('.plugin-ui-block'); }
@@ -205,7 +205,7 @@ function _crApplyStatus(block, data) {
 // ── Socket events ─────────────────────────────────────────────────────────────
 
 socket.on('cr_status', function(data) {
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     if (block.dataset.cam !== data.cam_id) return;
     _crApplyStatus(block, data);
   });
@@ -214,14 +214,14 @@ socket.on('cr_status', function(data) {
 socket.on('frame', function(data) {
   if (!data.cr_status) return;
   var st = data.cr_status;
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     if (block.dataset.cam !== st.cam_id) return;
     _crApplyStatus(block, st);
   });
 });
 
 socket.on('cr_event', function(data) {
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     if (block.dataset.cam !== data.cam_id) return;
     var msg = block.querySelector('.cr-msg');
     if (data.kind === 'error') {
@@ -240,7 +240,7 @@ socket.on('cr_event', function(data) {
 });
 
 socket.on('cr_elevation_prompt', function(data) {
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     if (block.dataset.cam !== data.cam_id) return;
     var prompt = block.querySelector('.cr-elevation-prompt');
     var msgEl  = block.querySelector('.cr-elevation-msg');
@@ -250,7 +250,7 @@ socket.on('cr_elevation_prompt', function(data) {
 });
 
 socket.on('cr_servo_status', function(data) {
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     if (block.dataset.cam !== data.cam_id) return;
     var el = block.querySelector('.cr-servo-conn-status');
     if (!el) return;
@@ -260,7 +260,7 @@ socket.on('cr_servo_status', function(data) {
 });
 
 socket.on('cr_servo_log', function(data) {
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     if (block.dataset.cam !== data.cam_id) return;
     var logEl = block.querySelector('.cr-servo-log');
     if (!logEl) return;
@@ -277,7 +277,7 @@ socket.on('cr_servo_log', function(data) {
 
 // cr_params_event: intrinsics auto-loaded from calibration files
 socket.on('cr_params_event', function(data) {
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     if (block.dataset.cam !== data.cam_id) return;
     var _v = function(sel, val) {
       var el = block.querySelector(sel);
@@ -306,7 +306,7 @@ socket.on('cr_params_event', function(data) {
 socket.on('state', function(data) {
   var allCamIds = data.cameras ? Object.keys(data.cameras) : [];
 
-  document.querySelectorAll('.plugin-ui-block[data-plugin="RTAB-Map_record"]').forEach(function(block) {
+  document.querySelectorAll('.plugin-ui-block[data-plugin="Z16&Color_Record"]').forEach(function(block) {
     var camId = block.dataset.cam;
     var st    = (data.cameras && camId) ? data.cameras[camId] : null;
     if (!st) return;
